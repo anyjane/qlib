@@ -41,7 +41,6 @@ COLLECTION_CONFIG = {
 
 # Alpha158 configuration
 ALPHA158_CONFIG = {
-    "instruments": "csi300",
     "handler": "Alpha158",
     "handler_module": "qlib.contrib.data.handler",
 }

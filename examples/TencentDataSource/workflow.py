@@ -62,12 +62,12 @@ def create_workflow_config(
     benchmark = market_info["benchmark"]
     
     # Data handler configuration
+    # Note: instruments is specified at the dataset level, not in handler kwargs
     data_handler_config = {
         "start_time": TIME_CONFIG["data_start"],
         "end_time": TIME_CONFIG["data_end"],
         "fit_start_time": TIME_CONFIG["train_start"],
         "fit_end_time": TIME_CONFIG["train_end"],
-        "instruments": market,
     }
     
     # Dataset configuration
@@ -80,6 +80,7 @@ def create_workflow_config(
                 "module_path": ALPHA158_CONFIG["handler_module"],
                 "kwargs": data_handler_config,
             },
+            "instruments": market,
             "segments": {
                 "train": [TIME_CONFIG["train_start"], TIME_CONFIG["train_end"]],
                 "valid": [TIME_CONFIG["test_start"], TIME_CONFIG["test_end"]],  # Use test as validation for simplicity
