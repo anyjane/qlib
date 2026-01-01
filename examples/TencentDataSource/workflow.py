@@ -19,7 +19,7 @@ from qlib.workflow.record_temp import SignalRecord, PortAnaRecord, SigAnaRecord
 from qlib.model.trainer import task_train
 from loguru import logger
 
-from .config import (
+from config import (
     TIME_CONFIG,
     MODEL_CONFIG,
     PORT_ANALYSIS_CONFIG,

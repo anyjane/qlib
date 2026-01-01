@@ -36,7 +36,7 @@ def collect_data(
 ):
     """
     Step 1: Collect data from Tencent API
-    
+
     Parameters
     ----------
     source_dir : str
@@ -57,23 +57,25 @@ def collect_data(
     logger.info("=" * 80)
     logger.info("STEP 1: COLLECTING DATA FROM TENCENT API")
     logger.info("=" * 80)
-    
-    # Initialize collector runner
+    logger.info(f"Date range: {start} to {end}")
+    logger.info(f"Interval: {interval}")
+
+    # Initialize runner
     run = TencentRun()
-    
+
     # Download data
-    logger.info(f"Downloading data from {start} to {end}...")
+    logger.info("Downloading data...")
     run.download_data(
         source_dir=source_dir,
         start=start,
         end=end,
         interval=interval,
-        max_workers=1,
+        max_workers=1,  # Recommended: 1
         max_collector_count=2,
         delay=0,
     )
     logger.info("Data download completed")
-    
+
     # Normalize data
     logger.info("Normalizing data...")
     run.normalize_data(
@@ -87,27 +89,34 @@ def collect_data(
     # Dump to Qlib format
     if not skip_dump:
         logger.info("Dumping data to Qlib format...")
-        
+
         # Import dump_bin
         scripts_dir = Path(__file__).resolve().parent.parent.parent / "scripts"
         sys.path.insert(0, str(scripts_dir))
-        
-        from dump_bin import DumpDataUpdate
-        
-        # Dump data
-        dumper = DumpDataUpdate(
-            csv_path=normalize_dir,
-            qlib_dir=qlib_dir,
-            freq="day",
-            date_field_name="date",
-            symbol_field_name="symbol",
-            include_fields="open,close,high,low,volume,amount,change",
-            max_workers=16,
-        )
-        dumper.dump()
-        logger.info("Data dumping completed")
+
+        try:
+            from dump_bin import DumpDataUpdate
+
+            # Dump data
+            dumper = DumpDataUpdate(
+                csv_path=normalize_dir,
+                qlib_dir=qlib_dir,
+                freq="day",
+                date_field_name="date",
+                symbol_field_name="symbol",
+                include_fields="open,close,high,low,volume,amount,change",
+                max_workers=16,
+            )
+            dumper.dump()
+            logger.info("Data dumping completed")
+        except ImportError as e:
+            logger.warning(f"Could not import dump_bin: {e}")
+            logger.warning("Skipping Qlib format dumping")
+            logger.warning("You can manually run:")
+            logger.warning(f"  cd {scripts_dir}")
+            logger.warning(f"  python dump_bin.py --csv_path {normalize_dir} --qlib_dir {qlib_dir} --freq day --include_fields open,close,high,low,volume,amount,change")
     else:
-        logger.info("Skipping Qlib format dumping")
+        logger.info("Skipping Qlib format dumping (as requested)")
     
     logger.info("=" * 80)
     logger.info("DATA COLLECTION COMPLETED SUCCESSFULLY")

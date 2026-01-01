@@ -6,7 +6,7 @@ This example demonstrates how to use Tencent's stock data API as a custom data s
 
 - **Tencent HTTP API Integration**: Fetch stock K-line data from Tencent's public API
 - **Automatic Pagination**: Handles API's 2000 records limit with smart pagination
-- **CSI300 Stock Pool**: Uses CSI300 index constituents as the stock universe
+- **CSI300 Stock Pool**: Uses CSI300 index constituents as stock universe
 - **Alpha158 Features**: Implements 158 technical factors for feature engineering
 - **Complete Workflow**: End-to-end pipeline from data collection to backtesting
 - **Performance Metrics**: Automatically outputs annualized return and Sharpe ratio
@@ -16,11 +16,14 @@ This example demonstrates how to use Tencent's stock data API as a custom data s
 
 ```
 TencentDataSource/
-├── __init__.py              # Package initialization
-├── config.py                # Configuration parameters
-├── tencent_data_source.py   # Data collector and normalizer
-├── workflow.py              # Training and backtesting workflow
-└── README.md                # This file
+├── __init__.py                        # Package initialization
+├── config.py                          # Configuration parameters
+├── tencent_data_source.py               # Data collector and normalizer (uses data_collector.base)
+├── workflow.py                         # Training and backtesting workflow
+├── run_example.py                      # Main entry point
+├── workflow_config_tencent_alpha158.yaml  # YAML configuration
+├── IMPORT_FIX_SUMMARY.md               # Import fix documentation
+└── README.md                          # This file
 ```
 
 ## Quick Start
@@ -32,121 +35,104 @@ TencentDataSource/
 pip install qlib pandas numpy requests loguru fire
 ```
 
-2. Ensure you have Qlib's default data for CSI300 (for stock list):
+2. (Optional) Ensure you have Qlib's default data for CSI300 (for stock list):
 ```bash
 python scripts/get_data.py qlib_data --target_dir ~/.qlib/qlib_data/cn_data --region cn
 ```
 
-### Step 1: Collect Data from Tencent API
+### Using .venv Environment
+
+Activate your virtual environment before running:
+```bash
+source .venv/bin/activate
+```
+
+### Complete Pipeline
+
+Run the complete pipeline with a single command:
 
 ```bash
 cd examples/TencentDataSource
 
-# Download data for CSI300 stocks from 2020-01-01 to 2025-12-31
-python -m tencent_data_source download_data \
-    --source_dir ~/.qlib/tencent_data/source \
+# Collect data + train + backtest
+python run_example.py all \
     --start 2020-01-01 \
     --end 2025-12-31 \
-    --interval day \
-    --max_workers 1
+    --experiment_name tencent_full_example
 ```
 
-### Step 2: Normalize and Convert to Qlib Format
+### Step-by-Step Execution
 
-```bash
-# Normalize the collected data
-python -m tencent_data_source normalize_data \
-    --source_dir ~/.qlib/tencent_data/source \
-    --normalize_dir ~/.qlib/tencent_data/normalize \
-    --interval day
-```
-
-### Step 3: Dump to Qlib Binary Format
-
-```bash
-# Convert normalized data to Qlib format
-cd ../../scripts
-python dump_bin.py \
-    --csv_path ~/.qlib/tencent_data/normalize \
-    --qlib_dir ~/.qlib/tencent_data/qlib_data \
-    --freq day \
-    --include_fields open,close,high,low,volume,amount,change
-```
-
-### Step 4: Run Training and Backtesting
+#### Step 1: Collect Data
 
 ```bash
 cd examples/TencentDataSource
 
-# Run the complete workflow
-python -m workflow run \
-    --provider_uri ~/.qlib/tencent_data/qlib_data \
-    --experiment_name tencent_alpha158_2025 \
-    --mode code \
-    --market csi300
+# Download data for CSI300 stocks
+python run_example.py collect \
+    --start 2020-01-01 \
+    --end 2025-12-31
+```
+
+This will:
+- Download data from Tencent's HTTP API
+- Normalize data
+- Convert to Qlib binary format
+- Save to `~/.qlib/tencent_data/qlib_data`
+
+#### Step 2: Run Training and Backtesting
+
+```bash
+# Run workflow with collected data
+python run_example.py workflow \
+    --qlib_dir ~/.qlib/tencent_data/qlib_data \
+    --experiment_name tencent_example \
+    --mode code
+```
+
+## Output Results
+
+The workflow automatically outputs following performance metrics:
+
+1. **Annualized Return (without cost)**: Yearly return excluding transaction costs
+2. **Sharpe Ratio (without cost)**: Risk-adjusted return without transaction costs
+3. **Annualized Return (with cost)**: Yearly return including transaction costs
+4. **Sharpe Ratio (with cost)**: Risk-adjusted return including transaction costs
+
+**Example Output**:
+```
+================================================================================
+FINAL RESULTS:
+Annualized Return (without cost): 0.1523
+Sharpe Ratio (without cost): 1.2345
+Annualized Return (with cost): 0.1234
+Sharpe Ratio (with cost): 1.0123
+================================================================================
 ```
 
 ## Configuration
 
 All parameters are configured in `config.py`:
 
-### Data Collection Settings
-
-```python
-COLLECTION_CONFIG = {
-    "interval": "day",           # Data frequency: "day" or "1min"
-    "max_workers": 1,            # Concurrent workers (recommend 1)
-    "max_collector_count": 2,     # Retry attempts for failed requests
-    "delay": 0,                 # Delay between requests (seconds)
-    "check_data_length": None,    # Minimum data length required
-}
-```
-
 ### Time Periods
 
-```python
-TIME_CONFIG = {
-    "train_start": "2020-01-01",
-    "train_end": "2024-12-31",
-    "test_start": "2025-01-01",
-    "test_end": "2025-12-31",
-}
-```
+- **Training Period**: 2020-01-01 to 2024-12-31
+- **Testing Period**: 2025-01-01 to 2025-12-31
 
 ### Model Configuration (LightGBM)
 
-```python
-MODEL_CONFIG = {
-    "class": "LGBModel",
-    "kwargs": {
-        "loss": "mse",
-        "learning_rate": 0.2,
-        "max_depth": 8,
-        "num_leaves": 210,
-        # ... more parameters
-    },
-}
-```
+- **Loss**: MSE (Mean Squared Error)
+- **Learning Rate**: 0.2
+- **Max Depth**: 8
+- **Number of Leaves**: 210
 
 ### Portfolio Strategy
 
-```python
-PORT_ANALYSIS_CONFIG = {
-    "strategy": {
-        "class": "TopkDropoutStrategy",
-        "kwargs": {
-            "signal": "<PRED>",
-            "topk": 50,           # Top 50 stocks
-            "n_drop": 5,          # Dropout 5 stocks
-        },
-    },
-    "backtest": {
-        "account": 100000000,      # 100 million initial capital
-        "open_cost": 0.0005,      # 0.05% buy cost
-        "close_cost": 0.0015,     # 0.15% sell cost
-    },
-}
-```
+- **Strategy**: TopkDropoutStrategy
+- **Top K**: 50 stocks
+- **Dropout**: 5 stocks
+- **Initial Capital**: 100,000,000 (100 million)
+- **Trading Cost**: Buy 0.05%, Sell 0.15%
 
 ## API Details
 
@@ -203,86 +189,11 @@ The Tencent API limits to 2000 records per request. The collector automatically 
 # Total: 3000 records
 ```
 
-## Workflow Components
+## Import Fix
 
-### 1. Data Collection (`TencentCollector`)
+This example now correctly imports `data_collector.base` from Qlib's scripts directory.
 
-- Fetches K-line data from Tencent API
-- Handles pagination for large datasets
-- Implements retry logic for failed requests
-- Supports concurrent data collection
-
-**Usage**:
-```python
-from tencent_data_source import TencentCollector
-
-collector = TencentCollector(
-    save_dir="~/.qlib/tencent_data/source",
-    start="2020-01-01",
-    end="2025-12-31",
-    interval="day",
-    max_workers=1,
-)
-collector.collector_data()
-```
-
-### 2. Data Normalization (`TencentNormalize`)
-
-- Converts Tencent data to Qlib format
-- Handles missing values and outliers
-- Aligns to trading calendar
-- Calculates daily returns
-
-**Usage**:
-```python
-from tencent_data_source import TencentNormalize
-
-normalizer = TencentNormalize(date_field_name="date", symbol_field_name="symbol")
-normalized_data = normalizer.normalize(raw_data)
-```
-
-### 3. Workflow Execution (`run_tencent_workflow`)
-
-- Initializes Qlib with custom data
-- Creates model and dataset
-- Trains LightGBM model on 2020-2024 data
-- Backtests on 2025 data
-- Outputs performance metrics
-
-**Usage**:
-```python
-from workflow import run_tencent_workflow
-
-results = run_tencent_workflow(
-    provider_uri="~/.qlib/tencent_data/qlib_data",
-    experiment_name="my_experiment",
-    mode="code",
-    market="csi300",
-)
-
-print(f"Annual Return: {results['annual_return_no_cost']}")
-print(f"Sharpe Ratio: {results['sharpe_ratio_no_cost']}")
-```
-
-## Output Metrics
-
-The workflow automatically outputs the following performance metrics:
-
-1. **Annualized Return (without cost)**: Yearly return excluding transaction costs
-2. **Sharpe Ratio (without cost)**: Risk-adjusted return without transaction costs
-3. **Annualized Return (with cost)**: Yearly return including transaction costs
-4. **Sharpe Ratio (with cost)**: Risk-adjusted return including transaction costs
-
-**Example Output**:
-```
-================================================================================
-FINAL RESULTS:
-Annualized Return (without cost): 0.1523
-Sharpe Ratio (without cost): 1.2345
-Annualized Return (with cost): 0.1234
-Sharpe Ratio (with cost): 1.0123
-================================================================================
-```
+See [IMPORT_FIX_SUMMARY.md](IMPORT_FIX_SUMMARY.md) for detailed information about the fix.
 
 ## Logging
 
@@ -293,96 +204,6 @@ Comprehensive logging is implemented throughout the workflow:
 - **WARNING**: Non-critical issues (e.g., failed requests)
 - **ERROR**: Critical errors
 
-**Enable Debug Logging**:
-```python
-import logging
-logging.basicConfig(level=logging.DEBUG)
-```
-
-## Troubleshooting
-
-### Issue: "No data returned from API"
-
-**Solution**: Check if the stock code is correct and trading. Some stocks may be delisted.
-
-### Issue: "Request timeout"
-
-**Solution**: Increase `REQUEST_TIMEOUT` in `tencent_data_source.py` or use a VPN if outside China.
-
-### Issue: "Missing instruments from Qlib"
-
-**Solution**: Download default Qlib data first:
-```bash
-python scripts/get_data.py qlib_data --target_dir ~/.qlib/qlib_data/cn_data --region cn
-```
-
-### Issue: "Data not found for 2025"
-
-**Solution**: Verify that the end date is within the available date range. Use a recent date as the end date.
-
-### Issue: "Memory error during data collection"
-
-**Solution**: Reduce `max_workers` to 1 and collect data in smaller batches by adjusting the date range.
-
-## Advanced Usage
-
-### Custom Stock Pool
-
-To use a custom stock pool instead of CSI300:
-
-```python
-# Modify get_instrument_list() in tencent_data_source.py
-def get_instrument_list(self) -> List[str]:
-    # Return your custom stock symbols
-    return ["sh600000", "sh600519", "sh601318", ...]
-```
-
-### Custom Alpha Features
-
-To modify Alpha158 configuration:
-
-```python
-# Edit ALPHA158_CONFIG in config.py
-ALPHA158_CONFIG = {
-    "handler": "Alpha360",  # Use Alpha360 instead
-    # or create custom handler
-}
-```
-
-### Custom Model
-
-To use a different model:
-
-```python
-# Edit MODEL_CONFIG in config.py
-MODEL_CONFIG = {
-    "class": "MLPModel",  # Use MLP instead of LGBM
-    "module_path": "qlib.contrib.model.pytorch_nn",
-    "kwargs": { ... },
-}
-```
-
-## Performance Tips
-
-1. **Data Collection**: Use `max_workers=1` to avoid rate limiting
-2. **Pagination**: The collector automatically handles pagination for large date ranges
-3. **Caching**: Once collected, data can be reused without re-downloading
-4. **Parallel Processing**: Qlib's workflow automatically uses multi-threading for data processing
-
-## References
-
-- [Qlib Documentation](https://qlib.readthedocs.io/)
-- [Tencent Stock API](https://web.ifzq.gtimg.cn/)
-- [Alpha158 Features](https://github.com/microsoft/qlib/blob/main/qlib/contrib/data/loader.py)
-- [LightGBM Documentation](https://lightgbm.readthedocs.io/)
-
 ## License
 
 Copyright (c) Microsoft Corporation. Licensed under the MIT License.
-
-## Support
-
-For issues and questions:
-- Check the [Qlib GitHub Issues](https://github.com/microsoft/qlib/issues)
-- Review the logs for detailed error messages
-- Verify API availability and data range
