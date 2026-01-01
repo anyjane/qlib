@@ -93,7 +93,7 @@ def collect_data(
 
             # Dump data
             dumper = DumpDataUpdate(
-                csv_path=normalize_dir,
+                data_path=normalize_dir,
                 qlib_dir=qlib_dir,
                 freq="day",
                 date_field_name="date",
