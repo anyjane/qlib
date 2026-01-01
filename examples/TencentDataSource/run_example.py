@@ -62,7 +62,6 @@ def collect_data(
     # Download data
     logger.info("Downloading data...")
     run.download_data(
-        source_dir=source_dir,
         start=start,
         end=end,
         max_collector_count=2,
