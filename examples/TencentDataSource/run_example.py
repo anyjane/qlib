@@ -89,10 +89,10 @@ def collect_data(
         sys.path.insert(0, str(scripts_dir))
 
         try:
-            from dump_bin import DumpDataUpdate
+            from dump_bin import DumpDataAll
 
             # Dump data
-            dumper = DumpDataUpdate(
+            dumper = DumpDataAll(
                 data_path=normalize_dir,
                 qlib_dir=qlib_dir,
                 freq="day",
@@ -108,7 +108,7 @@ def collect_data(
             logger.warning("Skipping Qlib format dumping")
             logger.warning("You can manually run:")
             logger.warning(f"  cd {scripts_dir}")
-            logger.warning(f"  python dump_bin.py --csv_path {normalize_dir} --qlib_dir {qlib_dir} --freq day --include_fields open,close,high,low,volume,amount,change")
+            logger.warning(f"  python dump_bin.py all --csv_path {normalize_dir} --qlib_dir {qlib_dir} --freq day --include_fields open,close,high,low,volume,amount,change")
     else:
         logger.info("Skipping Qlib format dumping (as requested)")
     
