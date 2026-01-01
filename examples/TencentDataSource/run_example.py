@@ -65,7 +65,6 @@ def collect_data(
         source_dir=source_dir,
         start=start,
         end=end,
-        max_workers=1,  # Recommended: 1
         max_collector_count=2,
         delay=0,
     )
