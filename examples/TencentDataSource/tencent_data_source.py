@@ -111,22 +111,52 @@ class TencentCollector(BaseCollector):
         List[str]
             List of stock symbols (e.g., ["sh600000", "sz000001"])
         """
-        # For now, return CSI300 stocks from a predefined list
-        # In production, this could fetch from Qlib's instrument provider
-        logger.info("Getting instrument list from CSI300 pool")
-
-        # Try to load from Qlib's instruments
+        # Read A500 stock list from CSV file
+        logger.info("Getting instrument list from A500 CSV file")
+        
+        csv_file = Path(__file__).parent / "a500.csv"
+        
         try:
-            import qlib
-            qlib.init(provider_uri="~/.qlib/qlib_data/cn_data", region="cn", expression_cache=None, dataset_cache=None)
-            from qlib.data import D
-            instruments = D.instruments("csi300")
-            logger.info(f"Loaded {len(instruments)} instruments from Qlib CSI300")
-            return list(instruments)
+            # Read CSV file
+            df = pd.read_csv(csv_file, encoding='utf-8')
+            
+            # Extract constituent codes (成份券代码 column)
+            if "成份券代码Constituent Code" not in df.columns:
+                logger.error(f"Column '成份券代码Constituent Code' not found in CSV")
+                logger.info(f"Available columns: {df.columns.tolist()}")
+                return []
+            
+            stock_codes = df["成份券代码Constituent Code"].dropna().unique().tolist()
+            logger.info(f"Loaded {len(stock_codes)} unique stock codes from A500 CSV")
+            
+            # Convert to Tencent API format (pad to 6 digits and add prefix)
+            tencent_symbols = []
+            for code in stock_codes:
+                code_str = str(code).strip()
+                
+                # Pad to 6 digits with leading zeros
+                code_str = code_str.zfill(6)
+                
+                # Add prefix based on first digit
+                if code_str.startswith('6'):
+                    # Shanghai stocks start with 6
+                    tencent_symbols.append(f"sh{code_str}")
+                elif code_str.startswith('0') or code_str.startswith('3'):
+                    # Shenzhen stocks start with 0 or 3
+                    tencent_symbols.append(f"sz{code_str}")
+                else:
+                    logger.warning(f"Unknown stock code format: {code_str}")
+            
+            # Remove duplicates and sort
+            tencent_symbols = sorted(list(set(tencent_symbols)))
+            logger.info(f"Converted to {len(tencent_symbols)} Tencent format symbols")
+            
+            return tencent_symbols
+            
         except Exception as e:
-            logger.warning(f"Failed to load instruments from Qlib: {e}")
-            logger.info("Using hardcoded CSI300 sample for demonstration")
-            # Fallback to a small sample of CSI300 stocks
+            logger.error(f"Failed to load instruments from CSV: {e}")
+            logger.info("Using fallback sample stocks")
+            # Fallback to a small sample
             return [
                 "sh600000", "sh600519", "sh601318", "sh601939", "sh600030",
                 "sz000001", "sz000002", "sz000651", "sz002594", "sz002415",
@@ -254,7 +284,35 @@ class TencentCollector(BaseCollector):
             logger.warning(f"No data available for {symbol}")
             return pd.DataFrame()
 
-        df = pd.DataFrame(all_data, columns=['date', 'open', 'close', 'high', 'low', 'volume', 'amount'])
+        # Normalize and filter data
+        # Handle special cases like dividend records that contain dict objects
+        normalized_data = []
+        for i, record in enumerate(all_data):
+            if len(record) < 6:
+                logger.warning(f"Skipping record {i} with insufficient columns: {len(record)}")
+                continue
+            
+            # Check if any column is a dict (dividend info, etc.)
+            # Take only the first 6 columns (date, open, close, high, low, volume)
+            filtered_record = []
+            for j, col in enumerate(record[:6]):
+                if isinstance(col, dict):
+                    logger.debug(f"Skipping dict column {j} in record {i}: {col}")
+                    break
+                filtered_record.append(col)
+            
+            # Ensure we have exactly 6 columns
+            if len(filtered_record) == 6:
+                normalized_data.append(filtered_record)
+            else:
+                logger.warning(f"Skipping record {i} after filtering: got {len(filtered_record)} columns")
+        
+        if len(normalized_data) == 0:
+            logger.warning(f"No valid data after filtering for {symbol}")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(normalized_data, columns=['date', 'open', 'close', 'high', 'low', 'volume'])
+        logger.info(f"Created DataFrame with {len(df)} rows after filtering {len(all_data)} raw records")
         df['date'] = pd.to_datetime(df['date'])
         df['symbol'] = symbol
 
@@ -354,7 +412,7 @@ class TencentNormalize(BaseNormalize):
     Normalize Tencent data to Qlib format
     """
 
-    COLUMNS = ["open", "close", "high", "low", "volume", "amount"]
+    COLUMNS = ["open", "close", "high", "low", "volume"]
 
     def __init__(
         self,
@@ -400,7 +458,7 @@ class TencentNormalize(BaseNormalize):
         df = df.sort_index()
 
         # Convert numeric columns
-        numeric_cols = ["open", "close", "high", "low", "volume", "amount"]
+        numeric_cols = ["open", "close", "high", "low", "volume"]
         for col in numeric_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
