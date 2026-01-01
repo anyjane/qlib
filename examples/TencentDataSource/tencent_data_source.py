@@ -9,6 +9,7 @@ import sys
 import logging
 import time
 import requests
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -25,11 +26,46 @@ sys.path.insert(0, str(QLIB_ROOT / "scripts"))
 # Direct import - will fail if data_collector is not available
 from data_collector.base import BaseCollector, BaseNormalize, BaseRun
 
-# Configure logging
+# Configure loguru - output to both console and file
+log_dir = CUR_DIR / "logs"
+log_dir.mkdir(exist_ok=True)
+
+# Generate timestamp for log filename
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+log_file = log_dir / f"tencent_data_{timestamp}.log"
+
+# Remove default handler
+logger.remove()
+
+# Add console handler with colored output
+logger.add(
+    sys.stderr,
+    format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+    level="INFO",
+    colorize=True,
+)
+
+# Add file handler with timestamp
+logger.add(
+    log_file,
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+    level="DEBUG",
+    rotation="100 MB",
+    retention="30 days",
+    compression="zip",
+    encoding="utf-8",
+)
+
+# Configure standard logging (for BaseRun and other modules)
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stderr)
+    ]
 )
+
+logger.info(f"Logging initialized. Log file: {log_file}")
 
 
 class TencentCollector(BaseCollector):

@@ -5,24 +5,18 @@ Example script to demonstrate the complete TencentDataSource workflow
 This script collects data, runs training and backtesting, and outputs results
 """
 
-import logging
 import sys
 from pathlib import Path
 
 import fire
-from loguru import logger
 
 # Add current directory to path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from tencent_data_source import TencentRun
+from tencent_data_source import TencentRun, logger
 from workflow import run_tencent_workflow
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Note: Logging is configured in tencent_data_source.py
 
 
 def collect_data(
