@@ -31,7 +31,6 @@ def collect_data(
     qlib_dir: str = "~/.qlib/tencent_data/qlib_data",
     start: str = "2020-01-01",
     end: str = "2025-12-31",
-    interval: str = "day",
     skip_dump: bool = False,
 ):
     """
@@ -49,8 +48,6 @@ def collect_data(
         Start date for data collection
     end : str
         End date for data collection
-    interval : str
-        Data interval: "day" or "1min"
     skip_dump : bool
         Skip dumping to Qlib format if True
     """
@@ -58,7 +55,6 @@ def collect_data(
     logger.info("STEP 1: COLLECTING DATA FROM TENCENT API")
     logger.info("=" * 80)
     logger.info(f"Date range: {start} to {end}")
-    logger.info(f"Interval: {interval}")
 
     # Initialize runner
     run = TencentRun()
@@ -69,7 +65,6 @@ def collect_data(
         source_dir=source_dir,
         start=start,
         end=end,
-        interval=interval,
         max_workers=1,  # Recommended: 1
         max_collector_count=2,
         delay=0,

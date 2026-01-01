@@ -445,7 +445,7 @@ class TencentRun(BaseRun):
     Run class for Tencent data collection
     """
 
-    def __init__(self, source_dir=None, normalize_dir=None, max_workers=1, interval="1d"):
+    def __init__(self, source_dir=None, normalize_dir=None, max_workers=1, interval="day"):
         """
         Override parent __init__ to avoid importing 'collector' module
         Use the current module instead
