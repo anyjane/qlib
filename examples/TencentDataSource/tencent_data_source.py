@@ -8,6 +8,7 @@ Fetches stock data from Tencent's HTTP API with pagination support
 import sys
 import logging
 import time
+from tracemalloc import start
 import requests
 from datetime import datetime
 from pathlib import Path
@@ -275,7 +276,8 @@ class TencentCollector(BaseCollector):
             logger.info(f"Fetch attempt {fetch_count} for {symbol}, end_date: {current_end_date.date()}")
 
             # Format dates for API
-            start_date_str = start_datetime.strftime("%Y-%m-%d")
+            # start_date_str = start_datetime.strftime("%Y-%m-%d")
+            start_date_str = ""
             end_date_str = current_end_date.strftime("%Y-%m-%d")
 
             # Build API parameter string
