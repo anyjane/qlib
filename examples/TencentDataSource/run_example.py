@@ -57,7 +57,10 @@ def collect_data(
     logger.info(f"Date range: {start} to {end}")
 
     # Initialize runner
-    run = TencentRun()
+    run = TencentRun(
+        source_dir=source_dir,
+        normalize_dir=normalize_dir,
+    )
 
     # Download data
     logger.info("Downloading data...")
@@ -72,8 +75,6 @@ def collect_data(
     # Normalize data
     logger.info("Normalizing data...")
     run.normalize_data(
-        source_dir=source_dir,
-        normalize_dir=normalize_dir,
         date_field_name="date",
         symbol_field_name="symbol",
     )
