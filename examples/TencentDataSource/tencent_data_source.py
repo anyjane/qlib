@@ -232,7 +232,7 @@ class TencentCollector(BaseCollector):
         all_data = []
         current_end_date = end_datetime
         fetch_count = 0
-        max_fetches = 10  # Safety limit to prevent infinite loops
+        max_fetches = 20  # Safety limit to prevent infinite loops
 
         while fetch_count < max_fetches:
             fetch_count += 1
@@ -258,22 +258,27 @@ class TencentCollector(BaseCollector):
             all_data.extend(data)
             logger.info(f"Fetched {len(data)} records for {symbol} (total: {len(all_data)})")
 
-            # Check if we got maximum 2000 records
-            if len(data) >= 2000:
-                # We need to fetch more data with pagination
-                # The first record in current batch is oldest, use its date as new end_date
-                oldest_date = data[0][0]  # First element of first record is date
-                logger.info(f"Reached 2000 record limit, fetching more data before {oldest_date}")
+            # Check if we need to fetch more data
+            # Get the oldest date from current batch (first record is oldest)
+            oldest_date_str = data[0][0]  # First element of first record is date
+            try:
+                oldest_date = pd.Timestamp(oldest_date_str)
+            except Exception as e:
+                logger.error(f"Failed to parse date {oldest_date_str}: {e}")
+                break
 
+            logger.info(f"Oldest date in this batch: {oldest_date.date()}, Requested start: {start_datetime.date()}")
+
+            # Check if we have reached or passed the start date
+            # If oldest_date is after start_datetime, there may be more data
+            if oldest_date > start_datetime:
+                # Need to fetch more data
                 # Set new end_date to day before oldest date in current batch
-                try:
-                    current_end_date = pd.Timestamp(oldest_date) - pd.Timedelta(days=1)
-                except Exception as e:
-                    logger.error(f"Failed to parse date {oldest_date}: {e}")
-                    break
+                current_end_date = oldest_date - pd.Timedelta(days=1)
+                logger.info(f"Still have earlier data, fetching before {current_end_date.date()}")
             else:
-                # Got all data, no need for more pagination
-                logger.info(f"Finished fetching data for {symbol}: {len(all_data)} records total")
+                # Reached or passed the start date, we have all data
+                logger.info(f"Reached start date {start_datetime.date()}, finished fetching: {len(all_data)} records total")
                 break
 
         if fetch_count >= max_fetches:
