@@ -1,0 +1,476 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+"""
+Tencent Data Source Collector
+Fetches stock data from Tencent's HTTP API with pagination support
+"""
+
+import abc
+import sys
+import logging
+import time
+import requests
+from pathlib import Path
+from typing import List, Optional
+from datetime import datetime
+
+import pandas as pd
+from loguru import logger
+from tqdm import tqdm
+
+# Add parent directories to path for imports
+CUR_DIR = Path(__file__).resolve().parent
+sys.path.append(str(CUR_DIR.parent.parent))
+sys.path.append(str(CUR_DIR.parent.parent.parent / "scripts"))
+
+from data_collector.base import BaseCollector, BaseNormalize, BaseRun
+from qlib.utils import code_to_fname
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+
+class TencentCollector(BaseCollector):
+    """
+    Collector for fetching stock data from Tencent's HTTP API
+    
+    API URL: https://web.ifzq.gtimg.cn/appstock/app/fqkline/get
+    Format: param={symbol},{interval},{start_date},{end_date},{count},{qfq}
+    Example: param=sh512290,day,2024-01-01,2025-12-31,2000,qfq
+    
+    Note: Tencent API limits to 2000 records per request. 
+    Pagination is implemented to fetch more than 2000 records.
+    """
+    
+    BASE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+    INTERVAL_DAY = "day"
+    REQUEST_TIMEOUT = 30
+    RETRY_COUNT = 3
+    RETRY_DELAY = 1
+    
+    def __init__(
+        self,
+        save_dir: str,
+        start=None,
+        end=None,
+        interval="day",
+        max_workers=1,
+        max_collector_count=2,
+        delay=0,
+        check_data_length: int = None,
+        limit_nums: int = None,
+    ):
+        """
+        Initialize Tencent collector
+        
+        Parameters
+        ----------
+        save_dir : str
+            Directory to save collected data
+        start : str, optional
+            Start date (default: 2000-01-01)
+        end : str, optional
+            End date (default: today)
+        interval : str, optional
+            Data interval: "day" or "1min" (default: "day")
+        max_workers : int, optional
+            Number of concurrent workers (default: 1, recommended)
+        max_collector_count : int, optional
+            Max retry attempts for failed requests (default: 2)
+        delay : float, optional
+            Delay between requests in seconds (default: 0)
+        check_data_length : int, optional
+            Minimum required data length (default: None)
+        limit_nums : int, optional
+            Limit number of stocks to fetch for debugging (default: None)
+        """
+        logger.info(f"Initializing TencentCollector with save_dir={save_dir}, interval={interval}")
+        super().__init__(
+            save_dir=save_dir,
+            start=start,
+            end=end,
+            interval=interval,
+            max_workers=max_workers,
+            max_collector_count=max_collector_count,
+            delay=delay,
+            check_data_length=check_data_length,
+            limit_nums=limit_nums,
+        )
+        
+        self.interval = interval
+        logger.info(f"TencentCollector initialized. Instrument list size: {len(self.instrument_list)}")
+
+    def get_instrument_list(self) -> List[str]:
+        """
+        Get list of stock symbols to collect
+        
+        Returns
+        -------
+        List[str]
+            List of stock symbols (e.g., ["sh600000", "sz000001"])
+        """
+        # For now, return CSI300 stocks from a predefined list
+        # In production, this could fetch from Qlib's instrument provider
+        logger.info("Getting instrument list from CSI300 pool")
+        
+        # Try to load from Qlib's instruments
+        try:
+            import qlib
+            qlib.init(provider_uri="~/.qlib/qlib_data/cn_data", region="cn", expression_cache=None, dataset_cache=None)
+            from qlib.data import D
+            instruments = D.instruments("csi300")
+            logger.info(f"Loaded {len(instruments)} instruments from Qlib CSI300")
+            return list(instruments)
+        except Exception as e:
+            logger.warning(f"Failed to load instruments from Qlib: {e}")
+            logger.info("Using hardcoded CSI300 sample for demonstration")
+            # Fallback to a small sample of CSI300 stocks
+            return [
+                "sh600000", "sh600519", "sh601318", "sh601939", "sh600030",
+                "sz000001", "sz000002", "sz000651", "sz002594", "sz002415",
+            ]
+
+    def normalize_symbol(self, symbol: str) -> str:
+        """
+        Normalize stock symbol for API request
+        
+        Parameters
+        ----------
+        symbol : str
+            Stock symbol in Qlib format (e.g., "sh600000")
+            
+        Returns
+        -------
+        str
+            Normalized symbol for Tencent API (e.g., "sh600000")
+        """
+        # Tencent API expects format like "sh600000" or "sz000001"
+        # Qlib already uses this format, so no conversion needed
+        return symbol.lower()
+
+    def _convert_qlib_symbol_to_tencent(self, qlib_symbol: str) -> str:
+        """
+        Convert Qlib symbol to Tencent API format
+        
+        Parameters
+        ----------
+        qlib_symbol : str
+            Symbol in Qlib format (e.g., "SH600000")
+            
+        Returns
+        -------
+        str
+            Symbol in Tencent format (e.g., "sh600000")
+        """
+        # Qlib uses uppercase (SH600000), Tencent uses lowercase (sh600000)
+        return qlib_symbol.lower()
+
+    def get_data(
+        self, 
+        symbol: str, 
+        interval: str, 
+        start_datetime: pd.Timestamp, 
+        end_datetime: pd.Timestamp
+    ) -> pd.DataFrame:
+        """
+        Fetch data from Tencent API with pagination support
+        
+        Parameters
+        ----------
+        symbol : str
+            Stock symbol
+        interval : str
+            Data interval ("day" or "1min")
+        start_datetime : pd.Timestamp
+            Start date
+        end_datetime : pd.Timestamp
+            End date
+            
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with columns: date, open, close, high, low, volume
+        """
+        logger.info(f"Fetching data for {symbol} from {start_datetime.date()} to {end_datetime.date()}")
+        
+        # Convert symbol to Tencent format
+        tencent_symbol = self._convert_qlib_symbol_to_tencent(symbol)
+        
+        # Pagination logic: fetch data in chunks if needed
+        all_data = []
+        current_end_date = end_datetime
+        fetch_count = 0
+        max_fetches = 10  # Safety limit to prevent infinite loops
+        
+        while fetch_count < max_fetches:
+            fetch_count += 1
+            logger.info(f"Fetch attempt {fetch_count} for {symbol}, end_date: {current_end_date.date()}")
+            
+            # Format dates for API
+            start_date_str = start_datetime.strftime("%Y-%m-%d")
+            end_date_str = current_end_date.strftime("%Y-%m-%d")
+            
+            # Build API parameter string
+            # Format: {symbol},{interval},{start},{end},{count},{qfq}
+            # Use 2000 as count to get max records per request
+            # qfq means "qian fu quan" (前复权, forward adjustment)
+            param_str = f"{tencent_symbol},{interval},{start_date_str},{end_date_str},2000,qfq"
+            
+            # Make request
+            data = self._fetch_from_api(param_str)
+            
+            if data is None or len(data) == 0:
+                logger.warning(f"No data returned for {symbol} with params {param_str}")
+                break
+            
+            all_data.extend(data)
+            logger.info(f"Fetched {len(data)} records for {symbol} (total: {len(all_data)})")
+            
+            # Check if we got the maximum 2000 records
+            if len(data) >= 2000:
+                # We need to fetch more data with pagination
+                # The first record in current batch is the oldest, use its date as new end_date
+                oldest_date = data[0][0]  # First element of first record is date
+                logger.info(f"Reached 2000 record limit, fetching more data before {oldest_date}")
+                
+                # Set new end_date to day before the oldest date in current batch
+                try:
+                    current_end_date = pd.Timestamp(oldest_date) - pd.Timedelta(days=1)
+                except Exception as e:
+                    logger.error(f"Failed to parse date {oldest_date}: {e}")
+                    break
+            else:
+                # Got all data, no need for more pagination
+                logger.info(f"Finished fetching data for {symbol}: {len(all_data)} records total")
+                break
+        
+        if fetch_count >= max_fetches:
+            logger.warning(f"Reached max fetch limit ({max_fetches}) for {symbol}, may have incomplete data")
+        
+        # Convert to DataFrame
+        if len(all_data) == 0:
+            logger.warning(f"No data available for {symbol}")
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(all_data, columns=['date', 'open', 'close', 'high', 'low', 'volume', 'amount'])
+        df['date'] = pd.to_datetime(df['date'])
+        df['symbol'] = symbol
+        
+        # Filter by date range (in case pagination returned extra data)
+        df = df[(df['date'] >= start_datetime) & (df['date'] <= end_datetime)]
+        df = df.sort_values('date').reset_index(drop=True)
+        
+        logger.info(f"Final data for {symbol}: {len(df)} records from {df['date'].min()} to {df['date'].max()}")
+        return df
+
+    def _fetch_from_api(self, param_str: str) -> Optional[List]:
+        """
+        Fetch data from Tencent API with retry logic
+        
+        Parameters
+        ----------
+        param_str : str
+            API parameter string
+            
+        Returns
+        -------
+        Optional[List]
+            List of data records if successful, None otherwise
+        """
+        url = f"{self.BASE_URL}?param={param_str}"
+        
+        for attempt in range(self.RETRY_COUNT):
+            try:
+                logger.debug(f"Fetching from URL: {url} (attempt {attempt + 1}/{self.RETRY_COUNT})")
+                
+                response = requests.get(
+                    url,
+                    timeout=self.REQUEST_TIMEOUT,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    }
+                )
+                response.raise_for_status()
+                
+                # Parse JSON response
+                json_data = response.json()
+                
+                # Tencent API response structure:
+                # {
+                #   "data": {
+                #     "sh600000": {
+                #       "qfqday": [
+                #         ["2025-01-02", "10.50", "10.60", "10.70", "10.45", "1000000", "10500000"],
+                #         ...
+                #       ]
+                #     }
+                #   }
+                # }
+                
+                if "data" not in json_data:
+                    logger.warning(f"No 'data' field in API response: {json_data}")
+                    return None
+                
+                # Get the first key (symbol) from data
+                data_dict = json_data["data"]
+                if not data_dict:
+                    logger.warning(f"Empty data dict in API response")
+                    return None
+                
+                symbol_key = list(data_dict.keys())[0]
+                symbol_data = data_dict[symbol_key]
+                
+                if "qfqday" not in symbol_data:
+                    logger.warning(f"No 'qfqday' field in symbol data for {symbol_key}")
+                    return None
+                
+                # Extract kline data
+                kline_data = symbol_data["qfqday"]
+                if not kline_data:
+                    logger.warning(f"Empty kline data for {symbol_key}")
+                    return None
+                
+                logger.debug(f"Successfully fetched {len(kline_data)} records")
+                return kline_data
+                
+            except requests.exceptions.Timeout:
+                logger.warning(f"Timeout on attempt {attempt + 1} for URL: {url}")
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"Request error on attempt {attempt + 1}: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected error on attempt {attempt + 1}: {e}")
+            
+            if attempt < self.RETRY_COUNT - 1:
+                time.sleep(self.RETRY_DELAY * (attempt + 1))
+        
+        logger.error(f"Failed to fetch data after {self.RETRY_COUNT} attempts: {url}")
+        return None
+
+
+class TencentNormalize(BaseNormalize):
+    """
+    Normalize Tencent data to Qlib format
+    """
+    
+    COLUMNS = ["open", "close", "high", "low", "volume", "amount"]
+    
+    def __init__(
+        self, 
+        date_field_name: str = "date", 
+        symbol_field_name: str = "symbol",
+        calendar_list=None,
+        **kwargs
+    ):
+        super().__init__(date_field_name, symbol_field_name, **kwargs)
+        self.calendar_list = calendar_list
+        
+    def normalize(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Normalize Tencent data to Qlib format
+        
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Raw data from Tencent API
+            
+        Returns
+        -------
+        pd.DataFrame
+            Normalized data in Qlib format
+        """
+        logger.debug(f"Normalizing data for symbol: {df[symbol_field_name].iloc[0] if len(df) > 0 else 'unknown'}")
+        
+        if df.empty:
+            return df
+        
+        df = df.copy()
+        
+        # Ensure required columns exist
+        required_cols = ["date", "open", "close", "high", "low", "volume"]
+        for col in required_cols:
+            if col not in df.columns:
+                logger.warning(f"Missing required column: {col}")
+                return pd.DataFrame()
+        
+        # Set date as index
+        df = df.set_index("date")
+        df.index = pd.to_datetime(df.index)
+        df = df.sort_index()
+        
+        # Convert numeric columns
+        numeric_cols = ["open", "close", "high", "low", "volume", "amount"]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        
+        # Remove duplicates
+        df = df[~df.index.duplicated(keep="first")]
+        
+        # Reindex to calendar if provided
+        if self.calendar_list is not None and len(self.calendar_list) > 0:
+            df = df.reindex(self.calendar_list)
+        
+        # Fill or handle missing values
+        # Volume should be 0 for missing data
+        df["volume"] = df["volume"].fillna(0)
+        
+        # Price columns forward fill, then backward fill
+        price_cols = ["open", "close", "high", "low"]
+        for col in price_cols:
+            if col in df.columns:
+                df[col] = df[col].ffill().bfill()
+        
+        # Calculate change (daily return)
+        df["change"] = df["close"].pct_change()
+        df["change"] = df["change"].replace([float("inf"), -float("inf")], np.nan).fillna(0)
+        
+        # Reset index
+        df = df.reset_index()
+        df.rename(columns={"index": "date"}, inplace=True)
+        
+        logger.debug(f"Normalized data: {len(df)} records")
+        return df
+    
+    def _get_calendar_list(self):
+        """Get benchmark calendar"""
+        # For simplicity, return None (use data's own dates)
+        # In production, this could fetch from Qlib's calendar
+        return None
+
+
+class TencentRun(BaseRun):
+    """
+    Run class for Tencent data collection
+    """
+    
+    @property
+    def default_base_dir(self):
+        """Default base directory for data storage"""
+        return Path(__file__).parent
+    
+    @property
+    def collector_class_name(self):
+        """Name of collector class"""
+        return "TencentCollector"
+    
+    @property
+    def normalize_class_name(self):
+        """Name of normalize class"""
+        return "TencentNormalize"
+
+
+if __name__ == "__main__":
+    # Test the collector
+    import fire
+    
+    # Create run instance
+    run = TencentRun()
+    
+    # Example: download data
+    fire.Fire({
+        "download_data": run.download_data,
+        "normalize_data": run.normalize_data,
+    })
