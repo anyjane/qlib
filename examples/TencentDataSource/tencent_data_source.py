@@ -185,6 +185,7 @@ class TencentCollector(BaseCollector):
                     logger.warning(f"Unknown stock code format: {code_str}")
             
             # Remove duplicates and sort
+            tencent_symbols.append("sh000300")  # Add Shanghai-Shenzhen 300 index as benchmark
             tencent_symbols = sorted(list(set(tencent_symbols)))
             logger.info(f"Converted to {len(tencent_symbols)} Tencent format symbols")
             
@@ -423,12 +424,17 @@ class TencentCollector(BaseCollector):
                 symbol_key = list(data_dict.keys())[0]
                 symbol_data = data_dict[symbol_key]
 
-                if "qfqday" not in symbol_data:
-                    logger.warning(f"No 'qfqday' field in symbol data for {symbol_key}")
+                # Extract kline data
+                # For stocks: data is in 'qfqday' (forward-adjusted)
+                # For indices: data is in 'day' (indices don't need adjustment)
+                if "qfqday" in symbol_data:
+                    kline_data = symbol_data["qfqday"]
+                elif "day" in symbol_data:
+                    kline_data = symbol_data["day"]
+                else:
+                    logger.warning(f"No 'qfqday' or 'day' field in symbol data for {symbol_key}")
                     return None
 
-                # Extract kline data
-                kline_data = symbol_data["qfqday"]
                 if not kline_data:
                     logger.warning(f"Empty kline data for {symbol_key}")
                     return None
@@ -497,7 +503,7 @@ class TencentNormalize(BaseNormalize):
 
         # Set date as index
         df = df.set_index("date")
-        df.index = pd.to_datetime(df.index)
+        df.index = pd.to_datetime(df.index, format='mixed')
         df = df.sort_index()
 
         # Convert numeric columns

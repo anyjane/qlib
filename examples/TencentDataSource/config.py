@@ -75,7 +75,7 @@ PORT_ANALYSIS_CONFIG = {
     },
     "backtest": {
         "start_time": "2025-01-01",
-        "end_time": "2025-12-31",
+        "end_time": "2025-12-30",
         "account": 100000000,
         "benchmark": "SH000300",
         "exchange_kwargs": {
