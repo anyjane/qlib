@@ -33,7 +33,7 @@ TIME_CONFIG = {
 # Data collection configuration
 COLLECTION_CONFIG = {
     "interval": "day",  # day or 1min
-    "max_workers": 1,  # Number of concurrent workers (recommend 1 for data collection)
+    "max_workers": 8,  # Number of concurrent workers (recommend 8 for parallel download)
     "max_collector_count": 2,  # Max retry attempts for failed requests
     "delay": 0,  # Delay between requests in seconds
     "check_data_length": None,  # Minimum required data length

@@ -421,7 +421,7 @@ python run_example.py workflow \
 ```python
 COLLECTION_CONFIG = {
     "interval": "day",           # 数据频率
-    "max_workers": 1,            # 并发工作数（建议 1）
+    "max_workers": 8,            # 并发工作数（建议 8）
     "max_collector_count": 2,    # 最大重试次数
     "delay": 0,                  # 请求延迟（秒）
     "check_data_length": None,   # 最小数据长度

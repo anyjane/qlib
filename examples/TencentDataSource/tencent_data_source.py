@@ -93,7 +93,7 @@ class TencentCollector(BaseCollector):
         start=None,
         end=None,
         interval="day",
-        max_workers=1,
+        max_workers=8,
         max_collector_count=2,
         delay=0,
         check_data_length=None,
@@ -546,7 +546,7 @@ class TencentRun(BaseRun):
     Run class for Tencent data collection
     """
 
-    def __init__(self, source_dir=None, normalize_dir=None, max_workers=1, interval="day"):
+    def __init__(self, source_dir=None, normalize_dir=None, max_workers=8, interval="day"):
         """
         Override parent __init__ to avoid importing 'collector' module
         Use the current module instead
