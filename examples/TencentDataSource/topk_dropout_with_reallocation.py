@@ -14,7 +14,7 @@ Features:
 - Capital reallocation (remaining capital redistributed to low-price stocks)
 - High capital utilization (99%+ vs 94% in original)
 
-IMPORTANT: When max_reallocation_rounds=0, this strategy behaves 
+IMPORTANT: When max_reallocation_rounds=0, this strategy behaves
 EXACTLY the same as the original TopkDropoutStrategy.
 """
 
@@ -31,25 +31,25 @@ from qlib.backtest.position import Position
 class TopkDropoutWithReallocation(TopkDropoutStrategy):
     """
     Enhanced TopkDropoutStrategy with capital reallocation
-    
+
     This strategy extends TopkDropoutStrategy by reallocating unused capital
-    caused by rounding to 100-share minimum units. 
-    
+    caused by rounding to 100-share minimum units.
+
     When max_reallocation_rounds=0, it behaves EXACTLY the same as the original
     TopkDropoutStrategy. When max_reallocation_rounds>0, it redistributes
     remaining capital from rounding to maximize utilization.
-    
+
     Algorithm:
     1. Use same stock selection logic as TopkDropoutStrategy
     2. Allocate equal cash to each stock in "buy" list (NEW stocks only)
     3. Round down to 100-share units
     4. If max_reallocation_rounds>0: redistribute remaining cash to buy stocks
     5. If max_reallocation_rounds=0: behave exactly like original
-    
+
     Example (100万 capital, 52 stocks, avg price 19.15元):
         - Original: 94.56% utilization, 51,637元 remaining
         - With reallocation: 99.88% utilization, 1,122元 remaining
-    
+
     Parameters
     ----------
     topk : int
@@ -96,7 +96,7 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
             forbid_all_trade_at_limit=forbid_all_trade_at_limit,
             **kwargs,
         )
-        
+
         self.verbose = verbose
         self.max_reallocation_rounds = max_reallocation_rounds
         self._trade_unit = 100  # Minimum trading unit for Chinese A-shares
@@ -111,7 +111,7 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
     ) -> Dict[str, float]:
         """
         Allocate cash to buy stocks with optional reallocation
-        
+
         Parameters
         ----------
         buy_list : List[str]
@@ -124,7 +124,7 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
             Trade start time
         trade_end_time : pd.Timestamp
             Trade end time
-            
+
         Returns
         -------
         Dict[str, float]
@@ -132,33 +132,38 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
         """
         if not buy_list:
             return {}
-        
+
         # Equal allocation (same as original strategy)
         value = cash * self.risk_degree / len(buy_list)
-        
+
         if self.verbose and self.max_reallocation_rounds > 0:
-            logger.info(f"\n=== Capital Allocation ===")
+            logger.info(
+                f"\n=== Capital Allocation (Date: {trade_start_time.strftime('%Y-%m-%d')}) ==="
+            )
             logger.info(f"  Available cash: {cash:,.2f} 元")
-            logger.info(f"  Cash for buying: {cash * self.risk_degree:,.2f} 元 (risk_degree={self.risk_degree})")
+            logger.info(
+                f"  Cash for buying: {cash * self.risk_degree:,.2f} 元 (risk_degree={self.risk_degree})"
+            )
             logger.info(f"  Number of buy stocks: {len(buy_list)}")
+            logger.info(f"  Buy stocks: {', '.join(buy_list)}")
             logger.info(f"  Value per stock: {value:,.2f} 元")
-        
+
         # First round: equal allocation with independent rounding
         actual_amounts = {}
         target_amounts = {}
         total_actual_value = 0.0
         prices_series = pd.Series(prices)
-        
+
         for stock_id in buy_list:
             price = prices.get(stock_id, 0)
             # Handle None or invalid prices
             if price is None or price <= 0:
                 continue
-            
+
             # Calculate target amount
             target_amount = value / price
             target_amounts[stock_id] = target_amount
-            
+
             # Round to trade unit (100 shares)
             factor = self.trade_exchange.get_factor(
                 stock_id=stock_id,
@@ -168,42 +173,48 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
             actual_amount = self.trade_exchange.round_amount_by_trade_unit(
                 target_amount, factor
             )
-            
+
             actual_amounts[stock_id] = actual_amount
             total_actual_value += actual_amount * price
-        
+
         # Calculate remaining cash after first round
         total_cash_for_buy = cash * self.risk_degree
         remaining_cash = total_cash_for_buy - total_actual_value
-        
+
         if self.verbose and self.max_reallocation_rounds > 0:
             logger.info(f"\nFirst Round Allocation:")
             logger.info(f"  Total value: {total_actual_value:,.2f} 元")
             logger.info(f"  Remaining cash: {remaining_cash:,.2f} 元")
-        
+
         # Reallocation rounds (only if max_reallocation_rounds > 0)
         if self.max_reallocation_rounds > 0 and remaining_cash > 100:
             # Sort stocks by price (ascending) to prioritize low-price stocks
             # Filter out invalid prices (None, 0, or negative)
-            stock_prices = [(stock_id, prices.get(stock_id, float('inf'))) 
-                           for stock_id in buy_list 
-                           if stock_id in prices and prices.get(stock_id) is not None 
-                           and prices.get(stock_id, 0) > 0]
+            stock_prices = [
+                (stock_id, prices.get(stock_id, float("inf")))
+                for stock_id in buy_list
+                if stock_id in prices
+                and prices.get(stock_id) is not None
+                and prices.get(stock_id, 0) > 0
+            ]
             stock_prices.sort(key=lambda x: x[1])
-            
+
             redistribution_round = 0
-            while remaining_cash > 0 and redistribution_round < self.max_reallocation_rounds:
+            while (
+                remaining_cash > 0
+                and redistribution_round < self.max_reallocation_rounds
+            ):
                 redistribution_round += 1
                 redistributed_this_round = False
-                
+
                 for stock_id, price in stock_prices:
                     if remaining_cash < price * self._trade_unit:
                         continue
-                    
+
                     # Calculate additional shares we can buy with remaining cash
                     additional_shares = int(remaining_cash / (price * self._trade_unit))
                     additional_shares = max(1, additional_shares)
-                    
+
                     # Update allocation
                     current_amount = actual_amounts.get(stock_id, 0)
                     additional_amount = additional_shares * self._trade_unit
@@ -213,55 +224,66 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
                     remaining_cash -= used_cash
                     total_actual_value += used_cash
                     redistributed_this_round = True
-                    
+
                     if self.verbose:
-                        logger.info(f"  Round {redistribution_round}: Allocated {used_cash:,.2f} to {stock_id} (price: {price:.2f})")
-                
+                        logger.info(
+                            f"  Round {redistribution_round}: Allocated {used_cash:,.2f} to {stock_id} (price: {price:.2f})"
+                        )
+
                 if not redistributed_this_round:
                     break
-        
+
         if self.verbose and self.max_reallocation_rounds > 0:
             logger.info(f"\nFinal Allocation:")
             logger.info(f"  Total value: {total_actual_value:,.2f} 元")
             logger.info(f"  Remaining cash: {remaining_cash:,.2f} 元")
-            logger.info(f"  Utilization: {(total_actual_value / total_cash_for_buy * 100):.2f}%")
-        
+            logger.info(
+                f"  Utilization: {(total_actual_value / total_cash_for_buy * 100):.2f}%"
+            )
+
         return actual_amounts
 
     def generate_trade_decision(self, execute_result=None):
         """
         Generate trade decisions with capital reallocation
-        
+
         CRITICAL: When max_reallocation_rounds=0, this behaves EXACTLY
         the same as the original TopkDropoutStrategy.
         """
         # Get trade time information (same as original)
         trade_step = self.trade_calendar.get_trade_step()
         trade_start_time, trade_end_time = self.trade_calendar.get_step_time(trade_step)
-        pred_start_time, pred_end_time = self.trade_calendar.get_step_time(trade_step, shift=1)
-        pred_score = self.signal.get_signal(start_time=pred_start_time, end_time=pred_end_time)
-        
+        pred_start_time, pred_end_time = self.trade_calendar.get_step_time(
+            trade_step, shift=1
+        )
+        pred_score = self.signal.get_signal(
+            start_time=pred_start_time, end_time=pred_end_time
+        )
+
         if isinstance(pred_score, pd.DataFrame):
             pred_score = pred_score.iloc[:, 0]
-        
+
         if pred_score is None:
             return TradeDecisionWO([], self)
-        
+
         # Copy current position for simulation (same as original)
         current_temp: Position = copy.deepcopy(self.trade_position)
-        
+
         # Get current stock list and cash (same as original)
         current_stock_list = current_temp.get_stock_list()
         cash = current_temp.get_cash()
-        
+
         # Stock selection logic - IDENTICAL to original strategy
         if self.only_tradable:
+
             def get_first_n(li, n, reverse=False):
                 cur_n = 0
                 res = []
                 for si in reversed(li) if reverse else li:
                     if self.trade_exchange.is_stock_tradable(
-                        stock_id=si, start_time=trade_start_time, end_time=trade_end_time
+                        stock_id=si,
+                        start_time=trade_start_time,
+                        end_time=trade_end_time,
                     ):
                         res.append(si)
                         cur_n += 1
@@ -277,10 +299,14 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
                     si
                     for si in li
                     if self.trade_exchange.is_stock_tradable(
-                        stock_id=si, start_time=trade_start_time, end_time=trade_end_time
+                        stock_id=si,
+                        start_time=trade_start_time,
+                        end_time=trade_end_time,
                     )
                 ]
+
         else:
+
             def get_first_n(li, n):
                 return list(li)[:n]
 
@@ -292,15 +318,19 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
 
         # last position (sorted by score) - IDENTICAL to original
         last = pred_score.reindex(current_stock_list).sort_values(ascending=False).index
-        
+
         # The new stocks today want to buy **at most** - IDENTICAL to original
         if self.method_buy == "top":
             today = get_first_n(
-                pred_score[~pred_score.index.isin(last)].sort_values(ascending=False).index,
+                pred_score[~pred_score.index.isin(last)]
+                .sort_values(ascending=False)
+                .index,
                 self.n_drop + self.topk - len(last),
             )
         elif self.method_buy == "random":
-            topk_candi = get_first_n(pred_score.sort_values(ascending=False).index, self.topk)
+            topk_candi = get_first_n(
+                pred_score.sort_values(ascending=False).index, self.topk
+            )
             candi = list(filter(lambda x: x not in last, topk_candi))
             n = self.n_drop + self.topk - len(last)
             try:
@@ -309,9 +339,13 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
                 today = candi
         else:
             raise NotImplementedError(f"This type of input is not supported")
-        
+
         # combine(new stocks + last stocks), we will drop stocks from this list - IDENTICAL
-        comb = pred_score.reindex(last.union(pd.Index(today))).sort_values(ascending=False).index
+        comb = (
+            pred_score.reindex(last.union(pd.Index(today)))
+            .sort_values(ascending=False)
+            .index
+        )
 
         # Get stock list we really want to sell - IDENTICAL to original
         if self.method_sell == "bottom":
@@ -319,7 +353,11 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
         elif self.method_sell == "random":
             candi = filter_stock(last)
             try:
-                sell = pd.Index(np.random.choice(candi, self.n_drop, replace=False) if len(last) else [])
+                sell = pd.Index(
+                    np.random.choice(candi, self.n_drop, replace=False)
+                    if len(last)
+                    else []
+                )
             except ValueError:
                 sell = candi
         else:
@@ -327,11 +365,11 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
 
         # Get stock list we really want to buy - IDENTICAL to original (line 231)
         buy = today[: len(sell) + self.topk - len(last)]
-        
+
         # Initialize order lists
         sell_order_list = []
         buy_order_list = []
-        
+
         # Generate sell orders - IDENTICAL to original (lines 232-262)
         for code in current_stock_list:
             if not self.trade_exchange.is_stock_tradable(
@@ -344,7 +382,10 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
             if code in sell:
                 # check hold limit
                 time_per_step = self.trade_calendar.get_freq()
-                if current_temp.get_stock_count(code, bar=time_per_step) < self.hold_thresh:
+                if (
+                    current_temp.get_stock_count(code, bar=time_per_step)
+                    < self.hold_thresh
+                ):
                     continue
                 # sell order
                 sell_amount = current_temp.get_stock_amount(code=code)
@@ -363,7 +404,7 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
                     )
                     # update cash
                     cash += trade_val - trade_cost
-        
+
         # Allocate capital to buy stocks - NEW LOGIC with reallocation
         if self.max_reallocation_rounds == 0:
             # Behavior EXACTLY same as original strategy (lines 266-294)
@@ -375,19 +416,27 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
                         stock_id=code,
                         start_time=trade_start_time,
                         end_time=trade_end_time,
-                        direction=None if self.forbid_all_trade_at_limit else OrderDir.BUY,
+                        direction=(
+                            None if self.forbid_all_trade_at_limit else OrderDir.BUY
+                        ),
                     ):
                         continue
                     # buy order
                     buy_price = self.trade_exchange.get_deal_price(
-                        stock_id=code, start_time=trade_start_time, 
-                        end_time=trade_end_time, direction=OrderDir.BUY
+                        stock_id=code,
+                        start_time=trade_start_time,
+                        end_time=trade_end_time,
+                        direction=OrderDir.BUY,
                     )
                     buy_amount = value / buy_price
                     factor = self.trade_exchange.get_factor(
-                        stock_id=code, start_time=trade_start_time, end_time=trade_end_time
+                        stock_id=code,
+                        start_time=trade_start_time,
+                        end_time=trade_end_time,
                     )
-                    buy_amount = self.trade_exchange.round_amount_by_trade_unit(buy_amount, factor)
+                    buy_amount = self.trade_exchange.round_amount_by_trade_unit(
+                        buy_amount, factor
+                    )
                     buy_order = Order(
                         stock_id=code,
                         amount=buy_amount,
@@ -415,7 +464,7 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
                         prices[stock_id] = price
                 except:
                     prices[stock_id] = 0.0
-            
+
             # Allocate with reallocation
             buy_amounts = self._allocate_to_buy_stocks(
                 buy_list=buy,
@@ -424,7 +473,7 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
                 trade_start_time=trade_start_time,
                 trade_end_time=trade_end_time,
             )
-            
+
             # Generate buy orders based on allocated amounts
             for stock_id, target_amount in buy_amounts.items():
                 # check is stock suspended
@@ -444,5 +493,10 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
                     direction=OrderDir.BUY,
                 )
                 buy_order_list.append(buy_order)
-        
+        logger.info("@" * 80)
+        logger.info(f"Total buy orders: {len(buy_order_list)}")
+        logger.info(f"buyer list is {buy_order_list}")
+        logger.info(f"Total sell orders: {len(sell_order_list)}")
+        logger.info(f"seller list is {sell_order_list}")
+        logger.info("@" * 80)
         return TradeDecisionWO(sell_order_list + buy_order_list, self)
