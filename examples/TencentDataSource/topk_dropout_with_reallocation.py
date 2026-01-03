@@ -138,7 +138,7 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
 
         if self.verbose and self.max_reallocation_rounds > 0:
             logger.info(
-                f"\n=== Capital Allocation (Date: {trade_start_time.strftime('%Y-%m-%d')}) ==="
+                f"=== Capital Allocation (Date: {trade_start_time.strftime('%Y-%m-%d')}) ==="
             )
             logger.info(f"  Available cash: {cash:,.2f} 元")
             logger.info(
@@ -182,9 +182,20 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
         remaining_cash = total_cash_for_buy - total_actual_value
 
         if self.verbose and self.max_reallocation_rounds > 0:
-            logger.info(f"\nFirst Round Allocation:")
+            logger.info(f"First Round Allocation:")
             logger.info(f"  Total value: {total_actual_value:,.2f} 元")
             logger.info(f"  Remaining cash: {remaining_cash:,.2f} 元")
+            
+            # Print detailed buy information
+            logger.info(f"  Stock Details:")
+            logger.info(f"  {'Stock ID':<12} {'Price':<10} {'Target Amount':<15} {'Actual Amount':<15} {'Value':<15}")
+            logger.info(f"  {'-' * 12} {'-' * 10} {'-' * 15} {'-' * 15} {'-' * 15}")
+            for stock_id in sorted(actual_amounts.keys()):
+                price = prices.get(stock_id, 0)
+                target_amt = target_amounts.get(stock_id, 0)
+                actual_amt = actual_amounts[stock_id]
+                value = actual_amt * price
+                logger.info(f"  {stock_id:<12} {price:<10.2f} {target_amt:<15.0f} {actual_amt:<15.0f} {value:<15,.2f}")
 
         # Reallocation rounds (only if max_reallocation_rounds > 0)
         if self.max_reallocation_rounds > 0 and remaining_cash > 100:
@@ -234,7 +245,7 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
                     break
 
         if self.verbose and self.max_reallocation_rounds > 0:
-            logger.info(f"\nFinal Allocation:")
+            logger.info(f"Final Allocation:")
             logger.info(f"  Total value: {total_actual_value:,.2f} 元")
             logger.info(f"  Remaining cash: {remaining_cash:,.2f} 元")
             logger.info(
@@ -242,6 +253,89 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
             )
 
         return actual_amounts
+
+    def _print_position_info(
+        self,
+        trade_start_time: pd.Timestamp,
+        trade_end_time: pd.Timestamp,
+    ):
+        """
+        Print detailed current position information
+
+        Parameters
+        ----------
+        trade_start_time : pd.Timestamp
+            Trade start time
+        trade_end_time : pd.Timestamp
+            Trade end time
+        """
+        # Get current stock list and cash
+        stock_list = self.trade_position.get_stock_list()
+        cash = self.trade_position.get_cash()
+
+        if not stock_list:
+            logger.info(f"=== Current Position (Date: {trade_start_time.strftime('%Y-%m-%d')}) ===")
+            logger.info(f"  Cash: {cash:,.2f} 元")
+            logger.info(f"  No stocks held")
+            return
+
+        # Calculate total position value
+        total_stock_value = 0.0
+        stock_details = []
+
+        for stock_id in sorted(stock_list):
+            # Get stock amount
+            amount = self.trade_position.get_stock_amount(code=stock_id)
+
+            # Get stock price
+            try:
+                price = self.trade_exchange.get_deal_price(
+                    stock_id=stock_id,
+                    start_time=trade_start_time,
+                    end_time=trade_end_time,
+                    direction=OrderDir.SELL,  # Use sell price for valuation
+                )
+                if price is None or price <= 0:
+                    price = 0.0
+            except:
+                price = 0.0
+
+            # Calculate stock value
+            stock_value = amount * price
+            total_stock_value += stock_value
+
+            stock_details.append({
+                'stock_id': stock_id,
+                'amount': amount,
+                'price': price,
+                'value': stock_value,
+            })
+
+        # Calculate total portfolio value
+        total_value = total_stock_value + cash
+
+        # Print position information
+        logger.info(f"=== Current Position (Date: {trade_start_time.strftime('%Y-%m-%d')}) ===")
+        logger.info(f"  Total Portfolio Value: {total_value:,.2f} 元")
+        logger.info(f"  Cash: {cash:,.2f} 元")
+        logger.info(f"  Stock Value: {total_stock_value:,.2f} 元")
+        logger.info(f"  Number of Stocks: {len(stock_list)}")
+        logger.info(f"  Stock Details:")
+        logger.info(f"  {'Stock ID':<12} {'Amount':<12} {'Price':<12} {'Value':<15} {'Pct':<10}")
+        logger.info(f"  {'-' * 12} {'-' * 12} {'-' * 12} {'-' * 15} {'-' * 10}")
+
+        for detail in stock_details:
+            pct = (detail['value'] / total_stock_value * 100) if total_stock_value > 0 else 0.0
+            logger.info(
+                f"  {detail['stock_id']:<12} "
+                f"{detail['amount']:<12.0f} "
+                f"{detail['price']:<12.2f} "
+                f"{detail['value']:<15,.2f} "
+                f"{pct:<10.2f}%"
+            )
+
+        logger.info(f"  {'-' * 12} {'-' * 12} {'-' * 12} {'-' * 15} {'-' * 10}")
+        logger.info(f"  {'Total':<12} {len(stock_list):<12} {'':<12} {total_stock_value:<15,.2f} 100.00%")
 
     def generate_trade_decision(self, execute_result=None):
         """
@@ -493,6 +587,13 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
                     direction=OrderDir.BUY,
                 )
                 buy_order_list.append(buy_order)
+        # Print detailed position information
+        if self.verbose:
+            logger.info("&"*80)
+            logger.info(f"Trading Day {trade_start_time} - {trade_end_time}")
+            self._print_position_info(trade_start_time, trade_end_time)
+            logger.info("&"*80)
+
         logger.info("@" * 80)
         logger.info(f"Total buy orders: {len(buy_order_list)}")
         logger.info(f"buyer list is {buy_order_list}")
