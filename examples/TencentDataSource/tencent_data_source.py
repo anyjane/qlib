@@ -49,7 +49,7 @@ logger.add(
 # Add file handler with timestamp
 logger.add(
     log_file,
-    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {function}:{line} - {message}",
     level="DEBUG",
     rotation="100 MB",
     retention="30 days",

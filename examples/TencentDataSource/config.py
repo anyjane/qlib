@@ -80,7 +80,7 @@ PORT_ANALYSIS_CONFIG = {
     "backtest": {
         "start_time": "2025-01-01",
         "end_time": "2025-12-30",
-        "account": 1000000,
+        "account": 500000,
         "benchmark": "SH000300",
         "exchange_kwargs": {
             "limit_threshold": 0.095,
