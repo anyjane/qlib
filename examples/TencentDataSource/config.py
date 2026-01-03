@@ -65,18 +65,22 @@ MODEL_CONFIG = {
 # Portfolio analysis configuration
 PORT_ANALYSIS_CONFIG = {
     "strategy": {
-        "class": "TopkDropoutStrategy",
-        "module_path": "qlib.contrib.strategy",
+        # "class": "TopkDropoutStrategy",
+        # "module_path": "qlib.contrib.strategy",
+        "class": "TopkDropoutWithReallocation",
+        "module_path": "examples.TencentDataSource.topk_dropout_with_reallocation",
         "kwargs": {
             "signal": "<PRED>",
-            "topk": 50,
-            "n_drop": 5,
+            "topk": 20,
+            "n_drop": 2,
+            "verbose": True,
+            "max_reallocation_rounds": 3,
         },
     },
     "backtest": {
         "start_time": "2025-01-01",
         "end_time": "2025-12-30",
-        "account": 100000000,
+        "account": 1000000,
         "benchmark": "SH000300",
         "exchange_kwargs": {
             "limit_threshold": 0.095,

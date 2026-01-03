@@ -149,7 +149,9 @@ def run_workflow(
     
     logger.info("=" * 80)
     logger.info("WORKFLOW COMPLETED SUCCESSFULLY")
+    logger.info("result is " + str(results))
     logger.info("=" * 80)
+
     
     return results
 
