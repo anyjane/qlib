@@ -366,6 +366,7 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
         # Get current stock list and cash (same as original)
         current_stock_list = current_temp.get_stock_list()
         cash = current_temp.get_cash()
+        logger.info(f"Initial cash (before sell orders): {cash:,.2f} 元")
 
         # Stock selection logic - IDENTICAL to original strategy
         if self.only_tradable:
@@ -465,7 +466,8 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
         buy_order_list = []
 
         # Track total sell value for calculating new available cash
-        total_sell_value = 0.0
+        total_sell_value_without_cost = 0.0
+        total_sell_value_with_cost = 0.0
 
         # Generate sell orders - IDENTICAL to original (lines 232-262)
         for code in current_stock_list:
@@ -502,7 +504,13 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
                     # update cash
                     cash += trade_val - trade_cost
                     # Track total sell value (excluding transaction cost)
-                    total_sell_value += trade_val
+                    total_sell_value_without_cost += trade_val
+                    total_sell_value_with_cost += trade_val - trade_cost
+
+        # Log cash after sell orders
+        logger.info(f"Sell orders total value (without cost): {total_sell_value_without_cost:,.2f} 元")
+        logger.info(f"Sell orders total value (with cost): {total_sell_value_with_cost:,.2f} 元")
+        logger.info(f"Cash after sell orders (available for buying): {cash:,.2f} 元")
 
         # Allocate capital to buy stocks - NEW LOGIC with reallocation
         if self.max_reallocation_rounds == 0:
@@ -626,8 +634,9 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
         else:
             logger.info(f"seller list is {sell_order_list}")
 
-        # Calculate total buy value for new available cash calculation
+        # Calculate total buy value and transaction costs for new available cash calculation
         total_buy_value = 0.0
+        total_buy_cost = 0.0
         for buy_order in buy_order_list:
             buy_price = self.trade_exchange.get_deal_price(
                 stock_id=buy_order.stock_id,
@@ -636,15 +645,21 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
                 direction=OrderDir.BUY,
             )
             if buy_price is not None and buy_price > 0:
-                total_buy_value += buy_order.amount * buy_price
+                trade_val = buy_order.amount * buy_price
+                total_buy_value += trade_val
+                # Calculate transaction cost using the same formula as exchange
+                # cost_ratio = open_cost + impact_cost (simplified, ignoring volume impact)
+                cost_ratio = self.trade_exchange.open_cost
+                trade_cost = max(trade_val * cost_ratio, self.trade_exchange.min_cost)
+                total_buy_cost += trade_cost
 
-        # Calculate and log new available cash after trades
-        new_available_cash = cash - total_buy_value
+        # Calculate and log new available cash after trades (including transaction costs)
+        new_available_cash = cash - total_buy_value - total_buy_cost
         logger.info("=" * 80)
         logger.info(f"Trade Summary:")
-        logger.info(f"  Current Cash before trade: {cash:,.2f} 元")
-        logger.info(f"  Total Sell Value: {total_sell_value:,.2f} 元")
+        logger.info(f"  Current Cash before buying trade: {cash:,.2f} 元")
         logger.info(f"  Total Buy Value: {total_buy_value:,.2f} 元")
+        logger.info(f"  Total Buy Transaction Cost: {total_buy_cost:,.2f} 元")
         logger.info(f"  New Available Cash: {new_available_cash:,.2f} 元")
         logger.info("=" * 80)
         logger.info("@" * 80)
