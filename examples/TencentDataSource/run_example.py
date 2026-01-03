@@ -92,7 +92,7 @@ def collect_data(
                 freq="day",
                 date_field_name="date",
                 symbol_field_name="symbol",
-                include_fields="open,close,high,low,volume,amount,change",
+                include_fields="open,close,high,low,volume,amount,change,factor",
                 max_workers=16,
             )
             dumper.dump()

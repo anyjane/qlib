@@ -461,7 +461,7 @@ class TencentNormalize(BaseNormalize):
     Normalize Tencent data to Qlib format
     """
 
-    COLUMNS = ["open", "close", "high", "low", "volume"]
+    COLUMNS = ["open", "close", "high", "low", "volume", "factor"]
 
     def __init__(
         self,
@@ -532,6 +532,11 @@ class TencentNormalize(BaseNormalize):
         # Calculate change (daily return)
         df["change"] = df["close"].pct_change()
         df["change"] = df["change"].replace([float("inf"), -float("inf")], np.nan).fillna(0)
+
+        # Add factor field (required by Qlib for trade_unit rounding)
+        # For Chinese A-shares, factor=1 means no split/merge adjustments
+        # Tencent data is forward-adjusted (前复权), so factor=1 is appropriate
+        df["factor"] = 1.0
 
         # Reset index
         df = df.reset_index()

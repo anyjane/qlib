@@ -464,6 +464,9 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
         sell_order_list = []
         buy_order_list = []
 
+        # Track total sell value for calculating new available cash
+        total_sell_value = 0.0
+
         # Generate sell orders - IDENTICAL to original (lines 232-262)
         for code in current_stock_list:
             if not self.trade_exchange.is_stock_tradable(
@@ -498,6 +501,8 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
                     )
                     # update cash
                     cash += trade_val - trade_cost
+                    # Track total sell value (excluding transaction cost)
+                    total_sell_value += trade_val
 
         # Allocate capital to buy stocks - NEW LOGIC with reallocation
         if self.max_reallocation_rounds == 0:
@@ -598,6 +603,49 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
         logger.info(f"Total buy orders: {len(buy_order_list)}")
         logger.info(f"buyer list is {buy_order_list}")
         logger.info(f"Total sell orders: {len(sell_order_list)}")
-        logger.info(f"seller list is {sell_order_list}")
+        
+        # Print seller list with sell prices
+        if self.verbose and sell_order_list:
+            logger.info("Seller list details:")
+            for order in sell_order_list:
+                sell_price = self.trade_exchange.get_deal_price(
+                    stock_id=order.stock_id,
+                    start_time=trade_start_time,
+                    end_time=trade_end_time,
+                    direction=OrderDir.SELL,
+                )
+                if sell_price is None or sell_price <= 0:
+                    sell_price = 0.0
+                sell_value = order.amount * sell_price
+                logger.info(
+                    f"  {order.stock_id}: "
+                    f"amount={order.amount:.0f}, "
+                    f"price={sell_price:.2f}, "
+                    f"value={sell_value:,.2f} 元"
+                )
+        else:
+            logger.info(f"seller list is {sell_order_list}")
+
+        # Calculate total buy value for new available cash calculation
+        total_buy_value = 0.0
+        for buy_order in buy_order_list:
+            buy_price = self.trade_exchange.get_deal_price(
+                stock_id=buy_order.stock_id,
+                start_time=trade_start_time,
+                end_time=trade_end_time,
+                direction=OrderDir.BUY,
+            )
+            if buy_price is not None and buy_price > 0:
+                total_buy_value += buy_order.amount * buy_price
+
+        # Calculate and log new available cash after trades
+        new_available_cash = cash - total_buy_value
+        logger.info("=" * 80)
+        logger.info(f"Trade Summary:")
+        logger.info(f"  Current Cash before trade: {cash:,.2f} 元")
+        logger.info(f"  Total Sell Value: {total_sell_value:,.2f} 元")
+        logger.info(f"  Total Buy Value: {total_buy_value:,.2f} 元")
+        logger.info(f"  New Available Cash: {new_available_cash:,.2f} 元")
+        logger.info("=" * 80)
         logger.info("@" * 80)
         return TradeDecisionWO(sell_order_list + buy_order_list, self)
