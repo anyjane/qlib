@@ -34,7 +34,7 @@ async def create_position(position: PositionCreate):
         if stock:
             position.name = stock["name"]
 
-        position_dict = position.dict()
+        position_dict = position.model_dump()
         position_dict["added_at"] = datetime.utcnow()
         position_dict["updated_at"] = datetime.utcnow()
         position_dict["market_value"] = position_dict["quantity"] * position_dict["cost_price"]
@@ -123,7 +123,7 @@ async def import_positions(file: UploadFile = File(...)):
                 # 检查是否已存在
                 existing = await MongoDB.get_position(position.code)
                 if not existing:
-                    position_dict = position.dict()
+                    position_dict = position.model_dump()
                     position_dict["added_at"] = datetime.utcnow()
                     position_dict["updated_at"] = datetime.utcnow()
                     position_dict["market_value"] = position_dict["quantity"] * position_dict["cost_price"]

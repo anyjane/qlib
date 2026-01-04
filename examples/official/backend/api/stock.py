@@ -192,7 +192,7 @@ async def initialize_stocks_from_csv():
         raise HTTPException(status_code=500, detail=f"初始化失败: {str(e)}")
 
 
-@router.post("/", response_model=StockResponse)
+@router.post("/", response_model=StockResponse, status_code=201)
 async def create_stock(stock: StockCreate):
     """添加股票"""
     try:
@@ -200,7 +200,7 @@ async def create_stock(stock: StockCreate):
         if existing:
             raise HTTPException(status_code=400, detail="股票已存在")
 
-        stock_dict = stock.dict()
+        stock_dict = stock.model_dump()
         stock_dict["created_at"] = datetime.utcnow()
         stock_dict["updated_at"] = datetime.utcnow()
         await MongoDB.insert_stock(stock_dict)
@@ -239,7 +239,7 @@ async def update_stock(code: str, stock: StockUpdate):
         if not existing:
             raise HTTPException(status_code=404, detail="股票不存在")
 
-        update_dict = stock.dict(exclude_unset=True)
+        update_dict = stock.model_dump(exclude_unset=True)
         update_dict["updated_at"] = datetime.utcnow()
 
         await MongoDB.update_stock(code, update_dict)

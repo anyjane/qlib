@@ -16,7 +16,7 @@ class AgentService:
         """创建代理配置"""
         agent_id = f"agent_{datetime.now().timestamp()}"
 
-        agent_dict = config.dict()
+        agent_dict = config.model_dump()
         agent_dict["agent_id"] = agent_id
         agent_dict["is_primary"] = False  # 默认不是主用
         agent_dict["status"] = "inactive"

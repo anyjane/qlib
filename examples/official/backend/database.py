@@ -35,13 +35,25 @@ class MongoDB:
     async def get_stocks(cls, enabled_only: bool = False) -> List[Dict]:
         """Get all stocks"""
         query = {"enabled": True} if enabled_only else {}
-        cursor = cls.database.stocks.find(query)
-        return await cursor.to_list(length=None)
+        cursor = cls.database.stocks.find(query, {"_id": 0})
+        stocks = await cursor.to_list(length=None)
+        # Ensure data types match Pydantic models
+        for stock in stocks:
+            if "code" in stock and stock["code"] is not None:
+                stock["code"] = str(stock["code"])
+            if "name" in stock and stock["name"] is not None:
+                stock["name"] = str(stock["name"])
+        return stocks
 
     @classmethod
     async def get_stock(cls, code: str) -> Optional[Dict]:
         """Get stock by code"""
-        return await cls.database.stocks.find_one({"code": code})
+        stock = await cls.database.stocks.find_one({"code": code}, {"_id": 0})
+        if stock and "name" in stock and stock["name"] is not None:
+            stock["name"] = str(stock["name"])
+        if stock and "code" in stock and stock["code"] is not None:
+            stock["code"] = str(stock["code"])
+        return stock
 
     @classmethod
     async def insert_stock(cls, stock_dict: Dict):
@@ -93,13 +105,24 @@ class MongoDB:
     @classmethod
     async def get_positions(cls) -> List[Dict]:
         """Get all positions"""
-        cursor = cls.database.local_positions.find({})
-        return await cursor.to_list(length=None)
+        cursor = cls.database.local_positions.find({}, {"_id": 0})
+        positions = await cursor.to_list(length=None)
+        for pos in positions:
+            if "code" in pos and pos["code"] is not None:
+                pos["code"] = str(pos["code"])
+            if "name" in pos and pos["name"] is not None:
+                pos["name"] = str(pos["name"])
+        return positions
 
     @classmethod
     async def get_position(cls, code: str) -> Optional[Dict]:
         """Get position by code"""
-        return await cls.database.local_positions.find_one({"code": code})
+        pos = await cls.database.local_positions.find_one({"code": code}, {"_id": 0})
+        if pos and "name" in pos and pos["name"] is not None:
+            pos["name"] = str(pos["name"])
+        if pos and "code" in pos and pos["code"] is not None:
+            pos["code"] = str(pos["code"])
+        return pos
 
     @classmethod
     async def insert_position(cls, position_dict: Dict):
@@ -156,14 +179,20 @@ class MongoDB:
         limit: int = None
     ):
         """Get predictions with filtering and sorting"""
-        cursor = cls.database.predictions.find(query or {})
+        cursor = cls.database.predictions.find(query or {}, {"_id": 0})
 
         if sort:
             cursor = cursor.sort(sort)
         if limit:
             cursor = cursor.limit(limit)
 
-        return cursor
+        predictions = await cursor.to_list(length=None)
+        for pred in predictions:
+            if "code" in pred and pred["code"] is not None:
+                pred["code"] = str(pred["code"])
+            if "name" in pred and pred["name"] is not None:
+                pred["name"] = str(pred["name"])
+        return predictions
 
     @classmethod
     async def insert_prediction(cls, prediction_dict: Dict):
@@ -177,13 +206,13 @@ class MongoDB:
     @classmethod
     async def get_all_agent_configs(cls) -> List[Dict]:
         """Get all agent configs"""
-        cursor = cls.database.agent_configs.find({})
+        cursor = cls.database.agent_configs.find({}, {"_id": 0})
         return await cursor.to_list(length=None)
 
     @classmethod
     async def get_agent_config(cls, agent_id: str) -> Optional[Dict]:
         """Get agent config by ID"""
-        return await cls.database.agent_configs.find_one({"agent_id": agent_id})
+        return await cls.database.agent_configs.find_one({"agent_id": agent_id}, {"_id": 0})
 
     @classmethod
     async def create_agent_config(cls, agent_dict: Dict):
@@ -215,7 +244,7 @@ class MongoDB:
     @classmethod
     async def get_primary_agent_config(cls) -> Optional[Dict]:
         """Get primary agent config"""
-        return await cls.database.agent_configs.find_one({"is_primary": True})
+        return await cls.database.agent_configs.find_one({"is_primary": True}, {"_id": 0})
 
     @classmethod
     async def update_agent_heartbeat(cls, agent_id: str):
@@ -248,7 +277,7 @@ class MongoDB:
     @classmethod
     async def get_data_task(cls, task_id: str) -> Optional[Dict]:
         """Get data task by ID"""
-        return await cls.database.data_tasks.find_one({"task_id": task_id})
+        return await cls.database.data_tasks.find_one({"task_id": task_id}, {"_id": 0})
 
     @classmethod
     async def update_data_task(cls, task_id: str, update_dict: Dict):
@@ -261,5 +290,5 @@ class MongoDB:
     @classmethod
     async def get_all_data_tasks(cls) -> List[Dict]:
         """Get all data tasks"""
-        cursor = cls.database.data_tasks.find({})
+        cursor = cls.database.data_tasks.find({}, {"_id": 0})
         return await cursor.to_list(length=None)
