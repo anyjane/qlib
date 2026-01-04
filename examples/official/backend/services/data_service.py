@@ -13,6 +13,23 @@ from database import MongoDB
 __all__ = ['TencentDataService', 'standardize_stock_codes']
 
 
+def standardize_stock_codes(codes: List[str]) -> List[str]:
+    """
+    标准化股票代码格式（模块级别函数）
+
+    将数字股票代码转换为 Qlib 需要的格式：
+    - 上海股票（60开头，688开头）：sh600000
+    - 深圳股票（00开头，30开头）：sz000001
+
+    Args:
+        codes: 原始股票代码列表
+
+    Returns:
+        标准化后的股票代码列表
+    """
+    return TencentDataService.standardize_stock_codes(codes)
+
+
 class TencentDataService:
     """腾讯数据下载服务"""
 
