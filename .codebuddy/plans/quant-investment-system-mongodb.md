@@ -3,26 +3,18 @@
 ## 项目概述
 在 `examples/official` 目录下创建一个基于 FastAPI 的量化投资管理系统，使用 MongoDB 存储数据，并利用 Qlib 在线模式进行数据管理。
 
-## 核心功能模块
-
-1. **代码管理** - 默认为空，支持从 A500.csv 重新初始化代码列表，支持增删改和批量操作
-2. **数据管理** - 腾讯 API 下载日线数据，使用 Qlib 在线模式，支持初始下载和增量更新
-3. **预测功能** - 使用 Alpha158 因子 + 多进程加速，支持历史查询、排序和持仓筛选
-4. **持仓管理** - 导入导出持仓，管理持仓的添加/删除/修改
-5. **日志管理** - 后端日志输出和前端打包下载
-
 ## 技术栈
 
 ### 后端
 - **框架**: FastAPI (Python 3.8+)
 - **端口**: 8000
-- **数据库**: MongoDB (替代 SQLite)
+- **数据库**: MongoDB (Motor 异步)
 - **Qlib 模式**: 在线模式 (Online Mode)
 - **多进程**: Python multiprocessing
 - **数据处理**: Qlib + Alpha158
 - **日志**: loguru
 - **API数据源**: 腾讯财经 API
-- **任务管理**: Qlib TaskManager + MongoDB
+- **HTTP 客户端**: httpx
 
 ### 前端
 - **框架**: Vue.js 3 + Element Plus
@@ -30,7 +22,7 @@
 - **调试**: 支持前后端联调模式
 
 ### 数据存储
-- **MongoDB**: 存储股票列表、持仓、预测结果
+- **MongoDB**: 存储股票列表、持仓、预测结果、代理配置、交易订单
 - **Qlib数据**: 在线模式共享数据服务
 - **Redis**: Qlib 表达式缓存和数据集缓存（在线模式）
 
@@ -51,7 +43,7 @@ examples/official/
 │   │   ├── stock.py       # 代码管理 API
 │   │   ├── data.py        # 数据管理 API
 │   │   ├── predict.py     # 预测 API
-│   │   ├── position.py     # 持仓管理 API
+│   │   ├── position.py     # 持仓管理 API（含交易操作）
 │   │   ├── agent.py        # 交易代理管理 API
 │   │   └── log.py        # 日志下载 API
 │   ├── services/
@@ -59,7 +51,9 @@ examples/official/
 │   │   ├── data_service.py        # 腾讯数据下载服务
 │   │   ├── prediction_service.py   # 多进程预测服务
 │   │   ├── qlib_service.py      # Qlib 在线模式封装
-│   │   └── mongo_service.py      # MongoDB 操作服务
+│   │   ├── mongo_service.py      # MongoDB 操作服务
+│   │   ├── agent_service.py      # 交易代理服务
+│   │   └── agent_client.py       # 交易代理 HTTP 客户端
 │   ├── workers/
 │   │   ├── __init__.py
 │   │   └── predict_worker.py      # 多进程预测工作进程
@@ -73,12 +67,17 @@ examples/official/
 │   │   │   ├── StockManager.vue      # 代码管理
 │   │   │   ├── DataManager.vue        # 数据管理
 │   │   │   ├── PredictResult.vue     # 预测结果
-│   │   │   └── PositionManager.vue   # 持仓管理
+│   │   │   ├── PositionManager.vue   # 持仓管理（含交易操作）
+│   │   ├── AgentManager.vue      # 交易代理管理
+│   │   ├── TradeManager.vue       # 交易管理（基于预测结果）
+│   │   └── LogManager.vue         # 日志管理
 │   │   ├── api/
 │   │   │   ├── stock.js
 │   │   │   ├── data.js
 │   │   │   ├── predict.js
-│   │   │   └── position.js
+│   │   ├── position.js
+│   │   ├── agent.js
+│   │   └── trade.js            # 交易 API
 │   │   └── utils/
 │   │       └── request.js    # Axios 封装
 │   ├── package.json
@@ -86,7 +85,20 @@ examples/official/
 ├── A500.csv               # 默认股票列表（中证500成分股）
 ├── README.md
 └── config.yaml            # 系统配置文件
+└── trade_agent.md           # 交易代理接口文档
 ```
+
+---
+
+## 核心功能模块
+
+1. **代码管理** - 默认为空，支持从 A500.csv 重新初始化代码列表，支持增删改和批量操作（支持多选和连续多选）
+2. **数据管理** - 腾讯 API 下载日线数据，使用 Qlib 在线模式，支持初始下载和增量更新
+3. **预测功能** - 使用 Alpha158 因子 + 多进程加速，支持历史查询、排序和持仓筛选
+4. **持仓管理** - 导入导出持仓，管理持仓的添加/删除/修改（支持多选和批量操作），支持买入/卖出/同步操作
+5. **交易代理管理** - 配置管理（URL、Token、状态查询），查询代理持仓，提交/查询订单
+6. **交易管理** - 基于预测结果的买入/卖出操作，按预测得分排序
+7. **日志管理** - 后端日志输出和前端打包下载
 
 ---
 
@@ -95,11 +107,6 @@ examples/official/
 ### 配置说明
 Qlib 支持两种模式：
 
-#### Offline Mode（离线模式）
-- 数据本地部署
-- 每个客户端独立管理数据
-- 默认模式
-
 #### Online Mode（在线模式）
 - 数据作为共享服务部署
 - 所有客户端共享数据和缓存
@@ -107,29 +114,6 @@ Qlib 支持两种模式：
 - 减少磁盘空间占用
 - 需要 Redis 作为缓存层
 - 需要独立的数据服务器进程
-
-### 在线模式配置
-
-```python
-# backend/config.py
-from qlib.config import MODE_CONF
-
-# Qlib 在线模式初始化
-mongo_conf = {
-    "task_url": "mongodb://localhost:27017/",
-    "task_db_name": "quant_system_db",
-}
-
-qlib.init(
-    provider_uri="~/.qlib/qlib_data/cn_data",
-    region=REG_CN,
-    mongo=mongo_conf,
-)
-
-# 切换到在线模式
-from qlib.config import C
-C.update(MODE_CONF["server"])  # 使用 server 配置
-```
 
 ### Server 模式配置项
 ```python
@@ -153,6 +137,7 @@ C.update(MODE_CONF["server"])  # 使用 server 配置
 
 ```python
 # Collections:
+
 # 1. stocks - 股票列表
 {
     "_id": ObjectId,
@@ -171,6 +156,9 @@ C.update(MODE_CONF["server"])  # 使用 server 配置
     "name": "平安银行",        # 股票名称
     "quantity": 1000,        # 持仓数量
     "cost_price": 12.50,     # 成本价
+    "market_value": 12500.00,  # 市值
+    "pnl": 1250.00,            # 盈亏
+    "pnl_percent": 10.00,  # 盈亏百分比
     "added_at": datetime,
     "updated_at": datetime,
 }
@@ -183,10 +171,58 @@ C.update(MODE_CONF["server"])  # 使用 server 配置
     "name": "平安银行",          # 股票名称
     "score": 0.85,            # 预测得分
     "rank": 5,                # 排名
+    "is_held": False,           # 是否持仓
     "created_at": datetime,
 }
 
-# 4. data_tasks - 数据下载任务（Qlib TaskManager）
+# 4. agent_config - 代理配置
+{
+    "_id": ObjectId,
+    "agent_url": str,           # 代理 URL
+    "agent_token": str,        # 代理 Token
+    "agent_name": str,           # 代理名称
+    "status": str,             # 状态（active/inactive）
+    "created_at": datetime,
+    "updated_at": datetime,
+}
+
+# 5. agent_positions - 代理持仓记录
+{
+    "_id": ObjectId,
+    "code": "sh600000",      # 股票代码
+    "name": "平安银行",        # 股票名称
+    "quantity": 1000,        # 持仓数量
+    "cost_price": 12.50,     # 成本价
+    "market_value": 12500.00,  # 市值
+    "pnl": 1250.00,            # 盈亏
+    "pnl_percent": 10.00,  # 盈亏百分比
+    "added_at": datetime,
+    "synced_at": datetime,    # 同步时间
+}
+
+# 6. local_positions - 本地持仓（与代理持仓不同步）
+{
+    "_id": ObjectId,
+    "code": "sh600000",      # 股票代码
+    "name": "平安银行",        # 股票名称
+    "quantity": 1000,        # 持仓数量
+    "cost_price": 12.50,     # 成本价
+    "market_value": 12500.00,  # 市值
+    "pnl": 1250.00,            # 盈亏
+    "pnl_percent": 10.00,  # 盈亏百分比
+    "added_at": datetime,
+    "updated_at": datetime,
+}
+
+# 7. agent_logs - 代理请求日志
+{
+    "_id": ObjectId,
+    "request": dict,          # 请求数据
+    "response": dict,         # 响应数据
+    "timestamp": datetime,
+}
+
+# 8. data_tasks - 数据下载任务
 {
     "_id": ObjectId,
     "task_id": "task_001",
@@ -196,66 +232,6 @@ C.update(MODE_CONF["server"])  # 使用 server 配置
     "created_at": datetime,
     "updated_at": datetime,
 }
-```
-
-### MongoDB 操作封装
-
-```python
-# backend/database.py
-from motor.motor_asyncio import AsyncIOMotorClient
-from bson import ObjectId
-from typing import List, Optional
-
-class MongoDB:
-    client: AsyncIOMotorClient = None
-    database = None
-
-    @classmethod
-    async def connect_to_database(cls, uri: str, db_name: str):
-        cls.client = AsyncIOMotorClient(uri)
-        cls.database = cls.client[db_name]
-        return cls.database
-
-    @classmethod
-    async def close_database(cls):
-        cls.client.close()
-
-    @classmethod
-    async def get_stock(cls, code: str):
-        return await cls.database.stocks.find_one({"code": code})
-
-    @classmethod
-    async def get_stocks(cls, enabled_only: bool = False):
-        query = {}
-        if enabled_only:
-            query["enabled"] = True
-        cursor = cls.database.stocks.find(query)
-        return await cursor.to_list(length=None)
-
-    @classmethod
-    async def clear_all_stocks(cls):
-        """清空所有股票列表（用于重新初始化）"""
-        result = await cls.database.stocks.delete_many({})
-        logger.info(f"Cleared all stocks: {result.deleted_count} records")
-        return result.deleted_count
-
-    @classmethod
-    async def insert_stock(cls, stock: dict):
-        result = await cls.database.stocks.insert_one(stock)
-        return str(result.inserted_id)
-
-    @classmethod
-    async def update_stock(cls, code: str, update: dict):
-        result = await cls.database.stocks.update_one(
-            {"code": code},
-            {"$set": update}
-        )
-        return result.modified_count > 0
-
-    @classmethod
-    async def delete_stock(cls, code: str):
-        result = await cls.database.stocks.delete_one({"code": code})
-        return result.deleted_count > 0
 ```
 
 ---
@@ -271,6 +247,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from ..database import MongoDB
 from ..models import StockCreate, StockUpdate, StockResponse
 from datetime import datetime
+from ..services.data_service import standardize_stock_codes
 
 router = APIRouter(prefix="/api/stocks", tags=["Stocks"])
 
@@ -298,7 +275,6 @@ async def initialize_stocks_from_csv():
         stock_codes = df['成份券代码Constituent Code'].tolist()
 
         # 标准化股票代码格式
-        from ..services.data_service import standardize_stock_codes
         standardized_codes = standardize_stock_codes(stock_codes)
 
         # 清空现有股票列表
@@ -319,7 +295,7 @@ async def initialize_stocks_from_csv():
 
         return {
             "message": f"Successfully initialized {imported} stocks from A500.csv",
-            "imported": imported
+            "imported": imported,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to initialize stocks: {str(e)}")
@@ -330,6 +306,7 @@ async def create_stock(stock: StockCreate):
     existing = await MongoDB.get_stock(stock.code)
     if existing:
         raise HTTPException(status_code=400, detail="Stock already exists")
+
     stock_dict = stock.dict()
     stock_dict["created_at"] = datetime.utcnow()
     stock_dict["updated_at"] = datetime.utcnow()
@@ -394,20 +371,6 @@ class StockResponse(StockCreate):
     enabled: bool = Field(default=True, description="是否启用")
     created_at: datetime
     updated_at: datetime
-
-class PositionCreate(BaseModel):
-    code: str = Field(..., description="股票代码")
-    quantity: float = Field(..., description="持仓数量")
-    cost_price: float = Field(..., description="成本价")
-    name: Optional[str] = Field(default="", description="股票名称")
-
-class PositionUpdate(BaseModel):
-    quantity: Optional[float] = None
-    cost_price: Optional[float] = None
-
-class PositionResponse(PositionCreate):
-    added_at: datetime
-    updated_at: datetime
 ```
 
 #### 前端界面 (StockManager.vue)
@@ -417,9 +380,9 @@ class PositionResponse(PositionCreate):
   - 复选框：支持单个选择
   - 全选/取消全选：支持全选和反选
   - 连选：Shift + 点击支持连续多选
-  - 添加/删除按钮
-  - 启用/禁用开关
-- 批量操作（对选中的股票进行操作）
+- 添加/删除按钮
+- 启用/禁用开关
+- 批量操作：
   - 批量启用：将选中的股票全部启用
   - 批量禁用：将选中的股票全部禁用
   - 批量删除：删除选中的所有股票
@@ -427,7 +390,7 @@ class PositionResponse(PositionCreate):
 
 ---
 
-### 2. 数据管理模块（Qlib 在线模式）
+### 2. 数据管理模块
 
 #### 后端实现 (backend/api/data.py)
 ```python
@@ -435,6 +398,7 @@ from fastapi import APIRouter, BackgroundTasks
 from datetime import datetime
 from ..services.data_service import TencentDataService
 from ..services.qlib_service import QlibOnlineService
+from ..services.mongo_service import MongoDB
 
 router = APIRouter(prefix="/api/data", tags=["Data"])
 
@@ -481,65 +445,16 @@ async def update_data(
 @router.get("/status/{task_id}")
 async def get_task_status(task_id: str):
     """查询任务状态"""
-    from ..services.mongo_service import MongoDB
     task = await MongoDB.get_data_task(task_id)
     return task
+
+@router.get("/status")
+async def get_all_tasks():
+    """查询所有下载任务状态"""
+    return await MongoDB.get_all_data_tasks()
 ```
 
-#### Qlib 在线服务 (backend/services/qlib_service.py)
-```python
-import qlib
-from qlib.config import MODE_CONF, C
-from qlib.data import D
-from qlib.constant import REG_CN
-from motor.motor_asyncio import AsyncIOMotorClient
-
-class QlibOnlineService:
-    def __init__(self):
-        # 使用在线模式配置
-        mongo_conf = {
-            "task_url": "mongodb://localhost:27017/",
-            "task_db_name": "quant_system_db",
-        }
-
-        # 切换到 server 模式（在线模式）
-        C.update(MODE_CONF["server"])
-
-        # 初始化 Qlib 在线模式
-        qlib.init(
-            provider_uri="~/.qlib/qlib_data/cn_data",
-            region=REG_CN,
-            mongo=mongo_conf,
-        )
-
-    async def get_latest_data_date(self):
-        """获取最新数据日期"""
-        instruments = D.instruments("all")
-        # 获取所有股票的最新数据日期
-        df = D.features(
-            instruments[:10],  # 采样查询
-            ["$close"],
-            start_time="2020-01-01",
-            end_time=datetime.now().strftime("%Y-%m-%d"),
-            freq="day"
-        )
-        if df is not None and not df.empty:
-            return df.index.get_level_values(1).max()
-        return None
-
-    async def get_stock_data(self, code: str, start: str, end: str):
-        """获取股票数据"""
-        df = D.features(
-            [code],
-            ["$open", "$high", "$low", "$close", "$volume"],
-            start_time=start,
-            end_time=end,
-            freq="day"
-        )
-        return df
-```
-
-#### 数据下载服务 (backend/services/data_service.py)
+#### 腾讯数据下载服务 (backend/services/data_service.py)
 ```python
 from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime
@@ -547,65 +462,14 @@ from pathlib import Path
 import requests
 import pandas as pd
 from loguru import logger
+from ..services.mongo_service import MongoDB
 
 class TencentDataService:
     BASE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-
-    @staticmethod
-    async def create_download_task(start_date: str, end_date: str, stocks: List[str]) -> str:
-        """创建下载任务并保存到 MongoDB"""
-        from ..services.mongo_service import MongoDB
-        task_id = f"download_{datetime.now().timestamp()}"
-        await MongoDB.insert_data_task({
-            "task_id": task_id,
-            "status": "pending",
-            "start_date": start_date,
-            "end_date": end_date or datetime.now().strftime("%Y-%m-%d"),
-            "stocks": stocks or [],
-            "created_at": datetime.utcnow(),
-        })
-        return task_id
-
-    @staticmethod
-    async def run_download(task_id: str):
-        """执行下载任务（后台任务）"""
-        from ..services.mongo_service import MongoDB
-
-        # 更新状态为 running
-        await MongoDB.update_data_task(task_id, {"status": "running"})
-
-        try:
-            # 从 MongoDB 获取任务详情
-            task = await MongoDB.get_data_task(task_id)
-
-            # 使用腾讯 API 下载数据
-            stocks_to_download = task.get("stocks", [])
-            if not stocks_to_download:
-                # 从 stocks 集合获取所有启用的股票
-                stocks_to_download = await MongoDB.get_stocks(enabled_only=True)
-                stocks_to_download = [s["code"] for s in stocks_to_download]
-
-            data_dict = await TencentDataService._download_from_tencent(
-                stocks_to_download,
-                task["start_date"],
-                task["end_date"]
-            )
-
-            # 转换为 Qlib 格式
-            await TencentDataService._convert_to_qlib_format(data_dict)
-
-            # 更新状态为 completed
-            await MongoDB.update_data_task(task_id, {
-                "status": "completed",
-                "updated_at": datetime.utcnow()
-            })
-
-        except Exception as e:
-            logger.error(f"Download task failed: {e}")
-            await MongoDB.update_data_task(task_id, {
-                "status": "failed",
-                "updated_at": datetime.utcnow()
-            })
+    INTERVAL_DAY = "day"
+    REQUEST_TIMEOUT = 30
+    RETRY_COUNT = 3
+    RETRY_DELAY = 1
 
     @staticmethod
     def standardize_stock_codes(codes: List[str]) -> List[str]:
@@ -636,6 +500,118 @@ class TencentDataService:
         return standardized
 
     @staticmethod
+    async def create_download_task(start_date: str, end_date: str, stocks: List[str]) -> str:
+        """创建下载任务并保存到 MongoDB"""
+        from ..services.mongo_service import MongoDB
+
+        task_id = f"download_{datetime.now().timestamp()}"
+        await MongoDB.insert_data_task({
+            "task_id": task_id,
+            "status": "pending",
+            "start_date": start_date,
+            "end_date": end_date or datetime.now().strftime("%Y-%m-%d"),
+            "stocks": stocks or [],
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+        })
+        return task_id
+
+    @staticmethod
+    async def create_update_task(stocks: List[str]) -> str:
+        """创建更新任务并保存到 MongoDB"""
+        from ..services.mongo_service import MongoDB
+
+        task_id = f"update_{datetime.now().timestamp()}"
+        await MongoDB.insert_data_task({
+            "task_id": task_id,
+            "status": "pending",
+            "start_date": None,
+            "end_date": None,
+            "stocks": stocks or [],
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+        })
+        return task_id
+
+    @staticmethod
+    async def run_download(task_id: str):
+        """执行下载任务（后台任务）"""
+        from ..services.mongo_service import MongoDB
+
+        try:
+            # 更新状态为 running
+            await MongoDB.update_data_task(task_id, {"status": "running"})
+
+            # 从 MongoDB 获取任务详情
+            task = await MongoDB.get_data_task(task_id)
+
+            # 使用腾讯 API 下载数据
+            stocks_to_download = task.get("stocks", [])
+            if not stocks_to_download:
+                # 获取所有启用的股票
+                stocks_data = await MongoDB.get_stocks(enabled_only=True)
+                stocks_to_download = [s["code"] for s in stocks_data]
+
+            data_dict = await TencentDataService._download_from_tencent(
+                stocks_to_download,
+                task["start_date"],
+                task["end_date"]
+            )
+
+            # 转换为 Qlib 格式
+            await TencentDataService._convert_to_qlib_format(data_dict)
+
+            # 更新状态为 completed
+            await MongoDB.update_data_task(task_id, {
+                "status": "completed",
+                "updated_at": datetime.utcnow()
+            })
+
+        except Exception as e:
+            logger.error(f"Download task failed: {e}")
+            await MongoDB.update_data_task(task_id, {
+                "status": "failed",
+                "updated_at": datetime.utcnow(),
+            })
+
+    @staticmethod
+    async def run_update(task_id: str):
+        """执行更新任务（后台任务）"""
+        from ..services.mongo_service import MongoDB
+
+        try:
+            # 更新状态为 running
+            await MongoDB.update_data_task(task_id, {"status": "running"})
+
+            # 从 MongoDB 获取任务详情
+            task = await MongoDB.get_data_task(task_id)
+
+            # 使用腾讯 API 下载数据
+            stocks_to_download = task.get("stocks", [])
+
+            data_dict = await TencentDataService._download_from_tencent(
+                stocks_to_download,
+                "2015-01-01",  # 从 2015-01-01 开始
+                datetime.now().strftime("%Y-%m-%d")  # 增量下载到今天
+            )
+
+            # 转换为 Qlib 格式
+            await TencentDataService._convert_to_qlib_format(data_dict)
+
+            # 更新状态为 completed
+            await MongoDB.update_data_task(task_id, {
+                "status": "completed",
+                "updated_at": datetime.utcnow(),
+            })
+
+        except Exception as e:
+            logger.error(f"Update task failed: {e}")
+            await MongoDB.update_data_task(task_id, {
+                "status": "failed",
+                "updated_at": datetime.utcnow(),
+            })
+
+    @staticmethod
     async def _download_from_tencent(stocks: List[str], start: str, end: str) -> dict:
         """从腾讯 API 下载数据"""
         data_dict = {}
@@ -644,7 +620,7 @@ class TencentDataService:
                 # 构造请求参数
                 param = f"{code},day,{start},{end},2000,qfq"
                 url = f"{TencentDataService.BASE_URL}?param={param}"
-                response = requests.get(url, timeout=30)
+                response = requests.get(url, timeout=TencentDataService.REQUEST_TIMEOUT)
                 response.raise_for_status()
                 data_dict[code] = response.json()
             except Exception as e:
@@ -659,13 +635,53 @@ class TencentDataService:
         pass
 ```
 
-#### 前端界面 (DataManager.vue)
-- 显示最新数据日期（从 Qlib 在线服务查询）
-- 下载按钮（全量下载，从 2015-01-01 开始）
-- 更新按钮（增量下载）
-- 下载进度条（从 MongoDB 查询任务状态）
-- 下载状态显示
-- 批量操作（选择股票下载）
+#### Qlib 在线服务 (backend/services/qlib_service.py)
+```python
+import qlib
+from qlib.config import MODE_CONF, C
+from qlib.constant import REG_CN
+from qlib.data import D
+
+class QlibOnlineService:
+    def __init__(self):
+        # 使用在线模式配置
+        C.update(MODE_CONF["server"])
+
+        # 初始化 Qlib
+        mongo_conf = {
+            "task_url": "mongodb://localhost:27017/",
+            "task_db_name": "quant_system_db",
+        }
+
+        qlib.init(
+            provider_uri="~/.qlib/qlib_data/cn_data",
+            region=REG_CN,
+            mongo=mongo_conf,
+        )
+
+    async def get_latest_data_date(self):
+        """获取最新数据日期"""
+        try:
+            # 获取所有股票
+            instruments = D.instruments("all")[:10]
+
+            # 获取所有股票的最新数据日期
+            df = D.features(
+                instruments,
+                ["$close"],
+                start_time="2020-01-01",
+                end_time=datetime.now().strftime("%Y-%m-%d"),
+                freq="day"
+            )
+
+            if df is not None and not df.empty:
+                # 获取最新日期
+                latest_date = df.index.get_level_values(1).max()
+                return latest_date.strftime("%Y-%m-%d")
+        except Exception as e:
+            logger.error(f"Failed to get latest data date: {e}")
+            return None
+```
 
 ---
 
@@ -691,9 +707,8 @@ async def predict(
         predict_date = datetime.now().strftime("%Y-%m-%d")
 
     # 获取所有启用的股票
-    if stocks is None:
-        stocks_data = await MongoDB.get_stocks(enabled_only=True)
-        stocks = [s["code"] for s in stocks_data]
+    stocks_data = await MongoDB.get_stocks(enabled_only=True)
+    stocks = [s["code"] for s in stocks_data]
 
     # 创建预测任务
     task_id = await PredictionService.create_prediction_task(
@@ -718,20 +733,24 @@ async def predict_history(
     stocks: List[str] = None
 ):
     """历史数据预测"""
-    # 获取日期范围
+    import pandas as pd
+    from datetime import timedelta
+
     date_range = pd.date_range(start_date, end_date, freq="D")
     tasks = []
 
     for date in date_range:
-        task_id = await PredictionService.create_prediction_task(
-            predict_date=date.strftime("%Y-%m-%d"),
-            stocks=stocks
-        )
-        tasks.append(task_id)
+        task_id = f"predict_{date.strftime('%Y%m%d')}"
+        tasks.append({
+            "task_id": task_id,
+            "predict_date": date.strftime("%Y-%m-%d"),
+            "stocks": stocks or [],
+            "created_at": datetime.utcnow(),
+        })
         background_tasks.add_task(PredictionService.run_prediction, task_id)
 
     return {
-        "task_ids": tasks,
+        "task_ids": [t["task_id"] for t in tasks],
         "status": "started",
         "message": f"Batch prediction started for {len(tasks)} dates"
     }
@@ -743,7 +762,7 @@ async def get_predictions(
     sort_by: str = "score",
     sort_order: str = "desc",
     limit: int = 100,
-    filter_type: str = "all"  # all, held, not_held
+    filter_type: str = "all"
 ):
     """
     查询预测结果
@@ -758,6 +777,9 @@ async def get_predictions(
             - all: 显示全部
             - held: 仅显示持仓
             - not_held: 仅显示非持仓
+
+    Returns:
+        预测结果列表
     """
     query = {}
     if date:
@@ -769,6 +791,7 @@ async def get_predictions(
     if filter_type != "all":
         positions = await MongoDB.get_positions()
         position_codes = set(p["code"] for p in positions)
+
         if filter_type == "held":
             query["code"] = {"$in": list(position_codes)}
         elif filter_type == "not_held":
@@ -783,6 +806,7 @@ async def get_predictions(
         "score": "score",
     }.get(sort_by, "score")
 
+    # 查询预测结果
     cursor = await MongoDB.get_predictions(
         query=query,
         sort=[(sort_field, sort_order)],
@@ -791,10 +815,11 @@ async def get_predictions(
 
     predictions = await cursor.to_list(length=None)
 
-    # 标记持仓状态（用于前端显示）
+    # 标记持仓状态
     if filter_type != "all":
         positions = await MongoDB.get_positions()
         position_codes = set(p["code"] for p in positions)
+
         for pred in predictions:
             pred["is_held"] = pred["code"] in position_codes
 
@@ -804,6 +829,17 @@ async def get_predictions(
 async def get_predictions_by_date(date: str):
     """查询指定日期的预测结果"""
     return await MongoDB.get_predictions({"date": date})
+
+@router.get("/status/{task_id}")
+async def get_prediction_status(task_id: str):
+    """查询预测任务状态"""
+    task = await MongoDB.get_prediction_task(task_id)
+    return task
+
+@router.get("/status")
+async def get_all_prediction_tasks():
+    """查询所有预测任务"""
+    return await MongoDB.get_all_prediction_tasks()
 ```
 
 #### 预测服务 (backend/services/prediction_service.py)
@@ -811,11 +847,14 @@ async def get_predictions_by_date(date: str):
 import pickle
 import qlib
 from qlib.config import MODE_CONF, C
-from qlib.constant import REG_CN
+from qlib.constant import REG_CN, REG_CN_CHILD
 from qlib.contrib.data.handler import Alpha158
 from multiprocessing import Pool, cpu_count
 from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime
+from ..services.mongo_service import MongoDB
+from ..services.qlib_service import QlibOnlineService
+from loguru import logger
 
 class PredictionService:
     def __init__(self):
@@ -824,7 +863,9 @@ class PredictionService:
             "task_url": "mongodb://localhost:27017/",
             "task_db_name": "quant_system_db",
         }
+
         C.update(MODE_CONF["server"])
+
         qlib.init(
             provider_uri="~/.qlib/qlib_data/cn_data",
             region=REG_CN,
@@ -835,13 +876,15 @@ class PredictionService:
     async def create_prediction_task(predict_date: str, stocks: List[str]) -> str:
         """创建预测任务"""
         from ..services.mongo_service import MongoDB
-        task_id = f"predict_{predict_date}_{datetime.now().timestamp()}"
+
+        task_id = f"predict_{predict_date.replace('-', '')}_{datetime.now().timestamp()}"
         await MongoDB.insert_prediction_task({
             "task_id": task_id,
             "status": "pending",
             "predict_date": predict_date,
             "stocks": stocks or [],
             "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
         })
         return task_id
 
@@ -850,51 +893,47 @@ class PredictionService:
         """执行预测任务（多进程）"""
         from ..services.mongo_service import MongoDB
 
-        # 更新状态
-        await MongoDB.update_prediction_task(task_id, {"status": "running"})
-
         try:
-            task = await MongoDB.get_prediction_task(task_id)
-            stocks = task.get("stocks", [])
-            predict_date = task["predict_date"]
+            # 更新状态为 running
+            await MongoDB.update_prediction_task(task_id, {"status": "running"})
 
-            if not stocks:
-                # 获取所有启用的股票
-                stocks_data = await MongoDB.get_stocks(enabled_only=True)
-                stocks = [s["code"] for s in stocks_data]
+            # 从 MongoDB 获取任务详情
+            task = await MongoDB.get_prediction_task(task_id)
 
             # 加载模型
-            model = await MongoDB.load_latest_model()
+            model = await MongoDB.get_latest_model()
             if model is None:
                 raise Exception("No trained model found")
 
             # 多进程预测
             results = await PredictionService._predict_mp(
-                stocks, predict_date, model
+                stocks=task.get("stocks", []),
+                predict_date=task["predict_date"],
+                model=model
             )
 
-            # 保存结果到 MongoDB
+            # 保存预测结果
             for result in results:
                 await MongoDB.insert_prediction({
-                    "date": predict_date,
+                    "date": task["predict_date"],
                     "code": result["code"],
-                    "name": result["name"],
                     "score": result["score"],
                     "rank": result["rank"],
+                    "is_held": False,  # 初始标记
                     "created_at": datetime.utcnow(),
                 })
 
-            # 更新状态
+            # 更新状态为 completed
             await MongoDB.update_prediction_task(task_id, {
                 "status": "completed",
-                "updated_at": datetime.utcnow()
+                "updated_at": datetime.utcnow(),
             })
 
         except Exception as e:
             logger.error(f"Prediction task failed: {e}")
             await MongoDB.update_prediction_task(task_id, {
                 "status": "failed",
-                "updated_at": datetime.utcnow()
+                "updated_at": datetime.utcnow(),
             })
 
     @staticmethod
@@ -903,7 +942,7 @@ class PredictionService:
         from ..workers.predict_worker import predict_worker
 
         # 将股票列表分批
-        batch_size = len(stocks) // num_processes + 1
+        batch_size = max(len(stocks) // num_processes + 1)
         batches = [
             stocks[i:i + batch_size]
             for i in range(0, len(stocks), batch_size)
@@ -929,19 +968,25 @@ class PredictionService:
 
         # 排序
         all_results.sort(key=lambda x: x["score"], reverse=True)
+
         # 添加排名
         for i, result in enumerate(all_results):
             result["rank"] = i + 1
 
         return all_results
+
+    @staticmethod
+    async def get_latest_model():
+        """获取最新模型"""
+        return await MongoDB.get_latest_model()
 ```
 
-#### 预测工作进程 (backend/workers/predict_worker.py)
+#### 多进程预测工作进程 (backend/workers/predict_worker.py)
 ```python
 import pickle
 import qlib
 from qlib.config import MODE_CONF, C
-from qlib.constant import REG_CN, REG_CN_CHILD
+from qlib.constant import REG_CN_CHILD
 from qlib.contrib.data.handler import Alpha158
 import pandas as pd
 
@@ -961,8 +1006,6 @@ def predict_worker(args):
     model = pickle.loads(model_pickle)
 
     results = []
-
-    # 批量预测
     for code in stock_batch:
         try:
             # 使用 Alpha158 获取特征
@@ -977,43 +1020,35 @@ def predict_worker(args):
             # 准备数据
             df = dataset.prepare("test")
 
-            if df is not None and not df.empty:
-                # 预测
-                pred = model.predict(df)
+            # 预测
+            if df is not None or df.empty:
+                continue
 
-                results.append({
-                    "code": code,
-                    "name": code,  # 可以从数据库获取名称
-                    "score": float(pred[0]) if len(pred) > 0 else 0.0,
-                    "rank": 0,
-                })
+            pred = model.predict(df)
+            results.append({
+                "code": code,
+                "score": float(pred[0]) if len(pred) > 0 else 0.0,
+                "rank": 0,
+            })
+
         except Exception as e:
             print(f"Error predicting {code}: {e}")
 
     return results
 ```
 
-#### 前端界面 (PredictResult.vue)
-- 日期选择器（默认今天）
-- 预测按钮
-- 结果表格（日期、代码、名称、预测得分、排名、持仓标记）
-- 排序功能（按日期、代码、名称、得分）
-- 搜索和筛选：
-  - 按股票代码搜索
-  - 按日期范围筛选
-  - 持仓筛选：显示全部/仅持仓/仅非持仓
-- 历史查询功能（批量历史预测）
-
 ---
 
-### 4. 持仓管理模块
+### 4. 持仓管理模块（含交易操作）
 
 #### 后端实现 (backend/api/position.py)
 ```python
 from fastapi import APIRouter, UploadFile, File
 from typing import List
 from ..services.mongo_service import MongoDB
-from ..models import PositionCreate, PositionResponse
+from ..services.trade_service import TradeService
+from ..models import PositionCreate, PositionUpdate, PositionResponse
+from datetime import datetime
 
 router = APIRouter(prefix="/api/positions", tags=["Positions"])
 
@@ -1095,16 +1130,6 @@ async def import_positions(file: UploadFile = File(...)):
 async def batch_operations(operation: str, codes: List[str], update_data: dict = None):
     """
     批量操作（支持多选和连续多选）
-
-    Args:
-        operation: 操作类型（delete/update）
-        codes: 选中的持仓代码列表（支持多选）
-        update_data: 更新数据（可选，用于批量更新持仓）
-            - quantity: 持仓数量
-            - cost_price: 成本价
-
-    Returns:
-        操作结果统计
     """
     if operation == "delete":
         result = await MongoDB.batch_delete_positions(codes)
@@ -1114,64 +1139,759 @@ async def batch_operations(operation: str, codes: List[str], update_data: dict =
         raise HTTPException(status_code=400, detail="Invalid operation")
     return {"modified_count": result}
 
-@router.get("/export")
-async def export_positions():
-    """导出持仓（CSV 格式）"""
-    from fastapi.responses import StreamingResponse
-    import pandas as pd
-    from io import StringIO
+# ============================================================================
+# 交易操作 API（基于持仓和预测结果）
+# ============================================================================
 
-    positions = await MongoDB.get_positions()
-    df = pd.DataFrame(positions)
-
-    output = StringIO()
-    df.to_csv(output, index=False)
-    output.seek(0)
-
-    return StreamingResponse(
-        output,
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=positions.csv"}
-    )
-
-@router.post("/batch")
-async def batch_operations(operation: str, codes: List[str]):
+@router.post("/positions/trade/buy")
+async def trade_stocks_buy(stocks: List[str]):
     """
-    批量操作（支持多选和连续多选）
-
-    Args:
-        operation: 操作类型（enable/disable/delete/update）
-        codes: 选中的持仓代码列表（支持多选）
-        update_data: 更新数据（可选，用于批量更新持仓）
-
-    Returns:
-        操作结果统计
+    买入操作：对选中的持仓代码执行买入
     """
-    if operation == "delete":
-        result = await MongoDB.batch_delete_positions(codes)
-    elif operation == "update" and update_data:
-        result = await MongoDB.batch_update_positions(codes, update_data)
-    else:
-        raise HTTPException(status_code=400, detail="Invalid operation")
-    return {"modified_count": result}
+    return await TradeService.trade_stocks_buy(stocks)
+
+@router.post("/positions/trade/sell")
+async def trade_stocks_sell(stocks: List[str]):
+    """
+    卖出操作：对选中的持仓代码执行卖出
+    """
+    return await TradeService.trade_stocks_sell(stocks)
+
+@router.post("/positions/trade/sync")
+async def sync_positions():
+    """
+    从交易代理同步持仓到本地数据库
+    """
+    return await TradeService.sync_positions()
+
+@router.get("/positions/trade/top")
+async def get_trade_candidates():
+    """
+    获取交易候选（根据预测得分排序）
+    """
+    return await TradeService.get_trade_candidates()
+```
+
+#### 交易服务 (backend/services/trade_service.py)
+```python
+from datetime import datetime
+from ..services.mongo_service import MongoDB
+from ..services.agent_service import AgentService
+from ..services.qlib_service import QlibOnlineService
+from loguru import logger
+
+class TradeService:
+    @staticmethod
+    async def trade_stocks_buy(stocks: List[str]):
+        """
+        买入操作：对选中的持仓代码执行买入
+
+        Args:
+            stocks: 持仓代码列表（支持多选）
+
+        Returns:
+            交易结果
+        """
+        # 获取持仓信息
+        positions = await MongoDB.get_positions()
+        position_dict = {p["code"]: 1 for p in positions}
+
+        # 提交买入订单到代理
+        response = await AgentService.submit_orders("buy", [
+            {
+                "code": pos["code"],
+                "quantity": pos["quantity"],
+                "price": await TradeService._get_market_price(pos["code"]),
+                "timestamp": datetime.now().isoformat()
+            }
+            for code in stocks
+        ])
+
+        # 保存交易记录
+        return {
+            "executed": len(stocks),
+            "message": f"Successfully executed {len(stocks)} buy orders"
+        }
+
+    @staticmethod
+    async def trade_stocks_sell(stocks: List[str]):
+        """
+        卖出操作：对选中的持仓代码执行卖出
+        """
+        # 获取持仓信息
+        positions = await MongoDB.get_positions()
+
+        # 提交卖出订单到代理
+        response = await AgentService.submit_orders("sell", [
+            {
+                "code": pos["code"],
+                "quantity": pos["quantity"],
+                "price": await TradeService._get_market_price(pos["code"]),
+                "timestamp": datetime.now().isoformat()
+            }
+            for code in stocks
+        ])
+
+        # 保存交易记录
+        return {
+            "executed": len(stocks),
+            "message": f"Successfully executed {len(stocks)} sell orders"
+        }
+
+    @staticmethod
+    async def sync_positions():
+        """
+        从交易代理同步持仓到本地数据库
+        """
+        # 获取代理持仓
+        response = await AgentService.get_positions()
+
+        if not response["success"]:
+            raise HTTPException(status_code=500, detail="Failed to sync positions from agent")
+
+        agent_positions = response["data"]["positions"]
+
+        # 清空本地持仓
+        await MongoDB.clear_all_local_positions()
+
+        # 同步代理持仓到本地
+        imported = 0
+        for agent_pos in agent_positions:
+            # 检查是否已存在
+            existing = await MongoDB.get_position(agent_pos["code"])
+
+            if existing:
+                # 更新持仓信息
+                await MongoDB.update_position(
+                    agent_pos["code"],
+                    {
+                        "quantity": agent_pos["quantity"],
+                        "cost_price": agent_pos["cost_price"],
+                        "synced_at": datetime.utcnow(),
+                    }
+                )
+            else:
+                # 插入新持仓
+                await MongoDB.insert_position({
+                    "code": agent_pos["code"],
+                    "name": agent_pos["name"],
+                    "quantity": agent_pos["quantity"],
+                    "cost_price": agent_pos["cost_price"],
+                    "market_value": agent_pos["market_value"],
+                    "pnl": agent_pos["pnl"],
+                    "pnl_percent": agent_pos["pnl_percent"],
+                    "synced_at": datetime.utcnow(),
+                })
+                imported += 1
+
+        return {
+            "imported": imported,
+            "total": len(agent_positions),
+        "message": "Successfully synced positions from agent"
+        }
+
+    @staticmethod
+    async def get_trade_candidates(limit: int = 10, filter_held: bool = None):
+        """
+        获取交易候选（根据预测得分排序）
+
+        Args:
+            limit: 返回数量限制
+            filter_held: 是否只包含持仓
+
+        Returns:
+            交易候选列表
+        """
+        # 获取所有预测结果
+        query = {}
+        query["date"] = datetime.now().strftime("%Y-%m-%d")
+
+        # 获取所有持仓
+        positions = await MongoDB.get_positions()
+        position_codes = set(p["code"] for p in positions)
+
+        # 筛选：只显示持仓
+        if filter_held:
+            query["code"] = {"$in": list(position_codes)}
+        elif filter_held is False:
+            query["code"] = {"$nin": list(position_codes)}
+
+        # 查询预测结果
+        cursor = await MongoDB.get_predictions(
+            query=query,
+            sort=[("score", -1)],
+            limit=limit
+        )
+
+        predictions = await cursor.to_list(length=None)
+
+        # 按是否是持仓标记
+        for pred in predictions:
+            pred["is_held"] = pred["code"] in position_codes
+
+        # 添加持仓信息到预测结果
+        for pred in predictions:
+            pos = next((p for p in positions if p["code"] == pred["code"]), None)
+            if pos:
+                pred["position"] = {
+                    "code": pos["code"],
+                    "name": pos["name"],
+                    "quantity": pos["quantity"],
+                    "cost_price": pos["cost_price"],
+                    "market_value": pos["market_value"],
+                    "pnl": pos["pnl"],
+                    "pnl_percent": pos["pnl_percent"],
+                }
+
+        # 排序（预测得分降序）
+        predictions.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+        return predictions[:limit]
+
+    @staticmethod
+    async def _get_market_price(code: str):
+        """
+        获取当前市场价格（用于交易）
+        """
+        # 从 Qlib 获取最新价格
+        df = D.features(
+            [code],
+            ["$close"],
+            start_time=datetime.now().strftime("%Y-%m-%d"),
+            end_time=datetime.now().strftime("%Y-%m-%d"),
+            freq="day"
+        )
+
+        if df is not None or df.empty:
+            return None
+
+        return float(df["$close"].iloc[-1])
+```
+
+#### 持仓管理数据模型 (backend/models.py)
+```python
+# ============================================================================
+# 交易代理管理模型
+# ============================================================================
+
+class AgentConfigCreate(BaseModel):
+    agent_url: str = Field(..., description="代理 URL")
+    agent_token: str = Field(..., description="代理 Token")
+    agent_name: str = Field(default="Default Agent", description="代理名称")
+
+class AgentConfigResponse(BaseModel):
+    agent_url: str
+    agent_token: str
+    agent_name: str
+    status: str = Field(default="active", description="状态")
+    created_at: datetime
+    updated_at: datetime
+
+class AgentOrderSubmit(BaseModel):
+    action: str = Field(..., description="操作类型（buy/sell/cancel）")
+    stocks: List[dict] = Field(..., description="股票列表")
+    timestamp: str = Field(default_factory=datetime.now().isoformat, description="时间戳")
+
+class AgentOrder(BaseModel):
+    order_id: str
+    action: str
+    code: str
+    name: str
+    price: float
+    quantity: int
+    status: str = Field(default="submitted", description="状态")
+
+class AgentOrder(BaseModel):
+    order_id: str
+    action: str
+    code: str
+    name: str
+    price: float
+    quantity: int
+    status: str = Field(default="submitted", description="状态")
+    created_at: datetime
+    updated_at: datetime
+
+class AgentPosition(BaseModel):
+    code: str
+    name: str
+    quantity: float
+    cost_price: float
+    market_value: float = Field(default=0.0, description="市值")
+    pnl: float = Field(default=0.0, description="盈亏")
+    pnl_percent: float = Field(default=0.0, description="盈亏百分比")
+    synced_at: datetime
+
+class AgentOrdersResponse(BaseModel):
+    total: int
+    orders: List[AgentOrder]
+
+class PositionCreate(BaseModel):
+    code: str = Field(..., description="股票代码")
+    quantity: float = Field(..., description="持仓数量")
+    cost_price: float = Field(..., description="成本价")
+    name: Optional[str] = Field(default="", description="股票名称")
+
+class PositionUpdate(BaseModel):
+    quantity: Optional[float] = None
+    cost_price: Optional[float] = None
+
+class PositionResponse(PositionCreate):
+    added_at: datetime
+    updated_at: datetime
+
+# ============================================================================
+# 持仓管理模型（扩展，包含交易操作）
+# ============================================================================
+
+class TradeStocksRequest(BaseModel):
+    stocks: List[str] = Field(..., description="持仓代码列表（支持多选）")
+
+class TradeResponse(BaseModel):
+    executed: int
+    message: str
+```
+
+class TradeCandidatesItem(BaseModel):
+    code: str = Field(..., description="股票代码")
+    name: str = Field(..., description="股票名称")
+    score: float = Field(..., description="预测得分")
+    rank: int = Field(..., description="排名")
+    is_held: bool = Field(default=False, description="是否持仓")
+    position: Optional[dict] = None  # 持仓信息（如果有）
+```
+
+class TradeCandidates(BaseModel):
+    items: List[TradeCandidatesItem]
 ```
 
 #### 前端界面 (PositionManager.vue)
 - 持仓列表表格
-- 表格功能：
-  - 复选框：支持单个选择
-  - 全选/取消全选：支持全选和反选
-  - 连选：Shift + 点击支持连续多选
-- 持仓操作：
+- 交易操作区：
+  - 买入按钮：对选中的持仓代码执行买入操作
+  - 卖出按钮：对选中的持仓代码执行卖出操作
+  - 同步按钮：从交易代理同步持仓
+- 持仓筛选：仅显示持仓/仅显示非持仓
+- 持仓管理操作：
   - 添加/删除/修改按钮
-  - 导入/导出按钮（CSV 格式）
-  - 批量删除：删除选中的所有持仓
-  - 批量更新：批量更新选中的持仓（数量、成本价等）
-- 搜索和筛选功能
+  - 导入/导出按钮
+  - 批量删除
+  - 批量更新（更新数量、成本价等）
+- 交易候选列表：显示根据预测得分排序的交易候选（含持仓信息）
+- 表格排序：按预测得分、代码、数量、市值等
+- 状态提示：
+  - 代理状态（主用代理可用/不可用）
+  - 交易状态（可执行/不可执行）
 
 ---
 
-### 5. 日志管理模块
+### 5. 交易代理管理模块
+
+#### 后端实现 (backend/api/agent.py)
+```python
+from fastapi import APIRouter
+from ..services.agent_service import AgentService
+from ..models import (
+    AgentConfigCreate, AgentConfigResponse,
+    AgentOrderSubmit, AgentOrder, AgentOrder,
+    AgentPosition, AgentOrdersResponse, TradeCandidates, TradeCandidates
+)
+
+router = APIRouter(prefix="/api/agent", tags=["Agent"])
+
+@router.post("/config")
+async def get_agent_config():
+    """获取交易代理配置"""
+    return await AgentService.get_agent_config()
+
+@router.post("/config")
+async def update_agent_config(agent_url: str, agent_token: str, agent_name: str):
+    """更新代理配置"""
+    return await AgentService.update_agent_config(agent_url, agent_token, agent_name)
+
+@router.post("/orders")
+async def submit_agent_orders(action: str, stocks: List[dict]):
+    """提交交易订单到代理"""
+    return await AgentService.submit_orders(action, stocks)
+
+@router.get("/orders")
+async def get_agent_orders(order_id: str = None, limit: int = 100):
+    """查询代理订单状态"""
+    return await AgentService.get_agent_orders(order_id, limit)
+
+@router.get("/positions")
+async def get_agent_positions():
+    """查询代理持仓状态"""
+    return await AgentService.get_agent_positions()
+```
+
+#### 交易代理服务 (backend/services/agent_service.py)
+```python
+import httpx
+from typing import Dict, List
+from datetime import datetime
+from ..services.mongo_service import MongoDB
+from loguru import logger
+
+class AgentService:
+    """交易代理管理服务"""
+
+    @staticmethod
+    async def get_agent_config():
+        """获取代理配置"""
+        config = await MongoDB.get_agent_config()
+        return config
+
+    @staticmethod
+    async def update_agent_config(agent_url: str, agent_token: str, agent_name: str):
+        """更新代理配置"""
+        await MongoDB.update_agent_config({
+            "agent_url": agent_url,
+            "agent_token": agent_token,
+            "agent_name": agent_name,
+            "updated_at": datetime.utcnow()
+        })
+
+    @staticmethod
+    async def submit_orders(action: str, stocks: List[dict]):
+        """提交交易订单到代理"""
+        config = await AgentService.get_agent_config()
+
+        payload = {
+            "action": action,
+            "stocks": stocks,
+            "timestamp": datetime.now().isoformat()
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{config['agent_url']}/api/agent/trade",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {config['agent_token']}",
+                    "Content-Type": "application/json"
+                },
+                timeout=30.0
+            )
+            response.raise_for_status()
+            return response.json()
+
+    @staticmethod
+    async def get_agent_orders(order_id: str = None, limit: int = 100):
+        """查询代理订单状态"""
+        config = await AgentService.get_agent_config()
+
+        params = {}
+        if order_id:
+            params["order_id"] = order_id
+        if limit:
+            params["limit"] = limit
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{config['agent_url']}/api/agent/orders",
+                params=params,
+                headers={
+                    "Authorization": f"Bearer {config['agent_token']}",
+                },
+                timeout=30.0
+            )
+            response.raise_for_status()
+            return response.json()
+
+    @staticmethod
+    async def get_agent_positions():
+        """查询代理持仓状态"""
+        config = await AgentService.get_agent_config()
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{config['agent_url']}/api/agent/positions",
+                headers={
+                    "Authorization": f"Bearer {config['agent']}",
+                },
+                timeout=30.0
+            )
+            response.raise_for_status()
+            return response.json()
+```
+
+#### 交易代理客户端 (backend/services/agent_client.py)
+```python
+import httpx
+from typing import List, Dict
+
+class AgentClient:
+    """交易代理 HTTP 客户端"""
+
+    def __init__(self, base_url: str, token: str):
+        self.base_url = base_url
+        self.token = token
+
+    async def submit_orders(self, action: str, stocks: List[dict]) -> dict:
+        """提交交易订单"""
+        payload = {
+            "action": action,
+            "stocks": stocks,
+            "timestamp": datetime.now().isoformat()
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await self.post("/api/agent/trade", json=payload)
+            return response.json()
+
+    async def get_orders(self, order_id: str = None, limit: int = 100) -> dict:
+        """查询订单状态"""
+        params = {}
+        if order_id:
+            params["order_id"] = order_id
+        if limit:
+            params["limit"] = limit
+
+        async with httpx.AsyncClient() as client:
+            response = await self.get("/api/agent/orders", params=params)
+            return response.json()
+
+    async def get_positions(self) -> dict:
+        """查询持仓状态"""
+        async with httpx.AsyncClient() as client:
+            response = await self.get("/api/agent/positions")
+            return response.json()
+```
+
+#### MongoDB 操作扩展 (backend/services/mongo_service.py)
+```python
+# 在后添加以下方法：
+
+@classmethod
+async def get_agent_config(cls):
+    """获取代理配置"""
+    config = await cls.database.agent_config.find_one({})
+    if config is None:
+        # 创建默认配置
+        config = {
+            "agent_url": "",
+            "agent_token": "",
+            "agent_name": "Default Agent",
+            "status": "inactive",
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+        }
+        await cls.database.agent_config.insert_one(config)
+
+    return config
+
+@classmethod
+async def update_agent_config(cls, agent_url: str, agent_token: str, agent_name: str):
+    """更新代理配置"""
+    result = await cls.database.agent_config.update_one(
+        {},
+        {"$set": {
+            "agent_url": agent_url,
+            "agent_token": agent_token,
+            "agent_name": agent_name,
+            "updated_at": datetime.utcnow()
+        }}
+    )
+    return result.modified_count > 0
+
+@classmethod
+async def clear_all_local_positions(cls):
+    """清空所有本地持仓"""
+    result = await cls.database.local_positions.delete_many({})
+    logger.info(f"Cleared all local positions: {result.deleted_count} records")
+    return result.deleted_count
+
+@classmethod
+async def batch_delete_positions(cls, codes: List[str]):
+    """批量删除持仓"""
+    result = await cls.database.local_positions.delete_many({"code": {"$in": codes}})
+    logger.info(f"Batch deleted {result.deleted_count} positions")
+    return result.deleted_count
+
+@classmethod
+async def batch_update_positions(cls, codes: List[str], update_data: dict):
+    """批量更新持仓"""
+    result = await cls.database.local_positions.update_many(
+        {"code": {"$in": codes}},
+        {"$set": update_data}
+    )
+    logger.info(f"Batch updated {result.modified_count} positions")
+    return result.modified_count
+```
+
+# 在后端添加以下 Collections:
+# - agent_config: 代理配置
+# - agent_positions: 代理持仓
+# - local_positions: 本地持仓
+# - agent_logs: 代理请求日志
+# - local_predictions: 本地预测结果（用于生成交易信号）
+```
+
+---
+
+### 6. 交易管理模块（基于预测结果）
+
+#### 后端实现 (backend/api/trade.py)
+```python
+from fastapi import APIRouter
+from ..services.trade_service import TradeService
+from ..models import TradeStocksRequest, TradeResponse, TradeCandidates
+
+router = APIRouter(prefix="/api/trade", tags=["Trade"])
+
+@router.post("/stocks")
+async def trade_stocks(request: TradeStocksRequest):
+    """
+    交易操作：买入或卖出指定的持仓代码
+    """
+    return await TradeService.trade_stocks(request.stocks)
+
+@router.get("/candidates")
+async def get_trade_candidates(limit: int = 10, filter_held: bool = None):
+    """
+    获取交易候选（根据预测得分排序）
+
+    Args:
+        limit: 返回数量限制
+        filter_held: 是否只包含持仓
+
+    Returns:
+            交易候选列表（按预测得分降序，包含持仓信息）
+        """
+    return await TradeService.get_trade_candidates(limit=limit, filter_held=filter_held)
+```
+
+#### 交易服务 (backend/services/trade_service.py)
+```python
+from datetime import datetime
+from ..services.mongo_service import MongoDB
+from ..services.agent_service import AgentService
+from ..services.qlib_service import QlibOnlineService
+from loguru import logger
+
+class TradeService:
+    """交易管理服务"""
+
+    @staticmethod
+    async def trade_stocks(stocks: List[str]):
+        """
+        买入操作：对选中的持仓代码执行买入
+
+        Args:
+            stocks: 持仓代码列表（支持多选）
+
+        Returns:
+            交易执行结果
+        """
+        # 获取持仓信息
+        positions = await MongoDB.get_positions()
+        position_dict = {p["code"]: 1 for p in positions}
+
+        # 提交买入订单到代理
+        response = await AgentService.submit_orders("buy", [
+            {
+                "code": pos["code"],
+                "quantity": pos["quantity"],
+                "price": await TradeService._get_market_price(pos["code"]),
+                "timestamp": datetime.now().isoformat()
+            }
+            for code in stocks
+        ])
+
+        # 保存交易记录
+        return {
+            "executed": len(stocks),
+            "message": f"Successfully executed {len(stocks)} buy orders"
+        }
+
+    @staticmethod
+    async def trade_stocks_sell(stocks: List[str]):
+        """
+        卖出操作：对选中的持仓代码执行卖出
+        """
+        # 获取持仓信息
+        positions = await MongoDB.get_positions()
+        position_dict = {p["code"]: 1 for p in positions}
+
+        # 提交卖出订单到代理
+        response = await AgentService.submit_orders("sell", [
+            {
+                "code": pos["code"],
+                "quantity": pos["quantity"],
+                "price": await TradeService._get_market_price(pos["code"]),
+                "timestamp": datetime.now().isoformat()
+            }
+            for code in stocks
+        ])
+
+        # 保存交易记录
+        return {
+            "executed": len(stocks),
+            "message": f"Successfully executed {len(stocks)} sell orders"
+        }
+
+    @staticmethod
+    async def sync_positions():
+        """
+        从交易代理同步持仓到本地数据库
+        """
+        return await TradeService.sync_positions()
+
+    @staticmethod
+    async def get_trade_candidates(limit: int = 10, filter_held: bool = None):
+        """
+        获取交易候选（根据预测得分排序）
+
+        Args:
+            limit: 返回数量限制
+            filter_held: 是否只包含持仓
+
+        Returns:
+            交易候选列表（按预测得分降序，包含持仓信息）
+        """
+        return await TradeService.get_trade_candidates(limit=limit, filter_held=filter_held)
+
+    @staticmethod
+    async def _get_market_price(code: str):
+        """
+        获取当前市场价格（用于交易）
+        """
+        # 从 Qlib 获取最新价格
+        df = D.features(
+            [code],
+            ["$close"],
+            start_time=datetime.now().strftime("%Y-%m-%d"),
+            end_time=datetime.now().strftime("%Y-%m-%d"),
+            freq="day"
+        )
+
+        if df is not None or df.empty:
+            return None
+
+        return float(df["$close"].iloc[-1])
+```
+
+#### 交易管理前端 (frontend/src/components/TradeManager.vue)
+- 交易候选列表：显示根据预测得分排序的买入/卖出候选
+- 表格内容：
+  - 股票代码、名称
+  - 预测得分、排名
+  - 持仓信息：持有数量、成本价、市值、盈亏、盈亏百分比
+  - 持仓标记（是否在持仓中）
+  - 排序功能：按预测得分、市值、盈亏
+- 筛选功能：
+  - 全部/持仓
+  - 仅显示持仓
+  - 仅显示非持仓
+- 交易操作：
+  - 买入按钮：执行买入
+  - 卖出按钮：执行卖出
+  - 同步按钮：从交易代理同步持仓
+
+---
+
+### 7. 日志管理模块
 
 #### 后端实现 (backend/api/log.py)
 ```python
@@ -1210,30 +1930,28 @@ async def download_log(filename: str):
     if not log_path.exists():
         raise HTTPException(status_code=404, detail="Log file not found")
 
-    from fastapi.responses import FileResponse
     return FileResponse(
         path=log_path,
-        filename=filename,
-        media_type="text/plain"
+        filename=filename
     )
 
 @router.post("/download/batch")
 async def download_logs_batch(filenames: List[str]):
     """批量下载日志（打包为 ZIP）"""
     from fastapi.responses import StreamingResponse
+    import zipfile
     from io import BytesIO
 
-    # 创建 ZIP 文件
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
         for filename in filenames:
             log_path = LOG_DIR / filename
             if log_path.exists():
-                zipf.write(log_path, filename)
+                zipf.write(log_path, arcname=filename)
 
     zip_buffer.seek(0)
 
-    zip_filename = f"logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    zip_filename = f"logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}{}.zip"
 
     return StreamingResponse(
         zip_buffer,
@@ -1242,40 +1960,7 @@ async def download_logs_batch(filenames: List[str]):
     )
 ```
 
-#### 后端日志配置 (backend/config.py)
-```python
-from loguru import logger
-from pathlib import Path
-
-LOG_DIR = Path("log")
-LOG_DIR.mkdir(exist_ok=True)
-
-# 移除默认处理器
-logger.remove()
-
-# 添加控制台处理器
-logger.add(
-    sys.stderr,
-    format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}:{function}:{line}</cyan> - <level>{message}</level>",
-    level="INFO",
-    colorize=True,
-)
-
-# 添加文件处理器
-logger.add(
-    LOG_DIR / "app_{time:YYYYMMDD}.log",
-    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
-    level="DEBUG",
-    rotation="100 MB",
-    retention="30 days",
-    compression="zip",
-    encoding="utf-8",
-)
-
-logger.info("Logging initialized")
-```
-
-#### 前端日志界面（集成在 PositionManager.vue 或单独页面）
+#### 前端日志管理界面 (frontend/src/components/LogManager.vue)
 - 日志文件列表
 - 下载单个日志按钮
 - 批量下载（打包 ZIP）按钮
@@ -1285,308 +1970,32 @@ logger.info("Logging initialized")
 
 ## 实现步骤
 
-### 第一步：项目初始化
-1. 创建目录结构 `examples/official/`
-2. 初始化后端项目
-   - 创建 `backend/main.py` FastAPI 应用
-   - 配置 CORS 支持前后端联调
-   - 配置 MongoDB 连接
-   - 配置 Qlib 在线模式
-   - 配置日志输出到 `log/` 目录
-3. 初始化前端项目
-   - 使用 Vite 创建 Vue 3 项目
-   - 配置 Element Plus UI 框架
-   - 配置代理到 `http://localhost:8000`
-4. 启动 MongoDB 服务
+1. **Week 1**: 项目初始化 + MongoDB 配置 + Qlib 在线模式
+2. **Week 2**: 代码管理 + 数据管理（腾讯 API 集成）
+3. **Week 3**: 预测功能 + 多进程优化 + 持仓筛选 + 交易代理集成
+4. **Week 4**: 持仓管理功能（导入导出、添加删除修改 + 交易操作 + 多选）
+5. **Week 5**: 交易管理（基于预测结果的买入/卖出）+ 日志管理
+6. **Week 6**: 集成测试和优化
 
-### 第二步：MongoDB 和 Qlib 在线模式配置
-1. 创建 `backend/database.py`
-   - Motor (Async MongoDB) 集成
-   - 定义 MongoDB 操作方法
-2. 创建 `backend/services/mongo_service.py`
-   - 封装 MongoDB 异步操作
-   - 定义 Collection 结构
-3. 创建 `backend/services/qlib_service.py`
-   - Qlib 在线模式初始化
-   - 配置 MODE_CONF["server"]
-   - 数据查询封装
-4. 初始化 MongoDB Collections
+## 关键特性
 
-### 第三步：代码管理功能
-1. 实现 `backend/api/stock.py`
-2. 实现 `backend/models.py` (Pydantic 模型)
-3. 实现 `frontend/src/components/StockManager.vue`
-4. 集成 A500.csv 导入功能
-5. 测试增删改查和批量操作
+- **代码管理**: 默认空列表 + A500.csv 重新初始化 + 批量操作 + 多选
+- **数据管理**: 腾讯 API + Qlib 在线模式 + 增量下载
+- **预测功能**: Alpha158 + 多进程 + 排序 + 持仓筛选
+- **持仓管理**: CRUD + 导入导出 + 多选 + 买入/卖出/同步
+- **交易代理管理**: 配置 + 订单管理 + 持仓查询
+- **交易管理**: 基于预测结果的买入/卖出 + 候选候选列表
+- **日志管理**: 文件列表 + 单个/批量下载
 
-### 第四步：数据管理功能（Qlib 在线模式）
-1. 实现 `backend/services/data_service.py`
-   - 腾讯 API 集成
-   - Qlib 数据转换
-   - 支持初始下载和增量下载
-2. 实现 `backend/api/data.py`
-3. 实现 `frontend/src/components/DataManager.vue`
-4. 集成 Qlib 在线模式查询
-5. 测试数据下载和查询
+## 参考文件
 
-### 第五步：预测功能（多进程）
-1. 实现 `backend/services/prediction_service.py`
-   - Alpha158 特征计算
-   - 多进程 Pool 实现
-2. 实现 `backend/workers/predict_worker.py`
-   - 子进程独立初始化 Qlib
-   - Alpha158 数据准备
-3. 实现 `backend/api/predict.py`
-4. 实现 `frontend/src/components/PredictResult.vue`
-5. 集成排序和查询功能
-6. 测试多进程预测性能
-
-### 第六步：持仓管理功能
-1. 实现 `backend/api/position.py`
-2. 实现 `frontend/src/components/PositionManager.vue`
-3. 实现持仓的添加、删除、修改功能
-4. 实现持仓的导入导出功能
-5. 测试持仓管理功能
-
-### 第七步：日志管理功能
-1. 配置后端 loguru 日志
-   - 输出到 `log/` 目录
-   - 日志轮转（100MB，保留30天）
-2. 实现 `backend/api/log.py`
-3. 前端实现日志下载界面
-4. 测试日志文件管理
-
-### 第八步：集成测试和优化
-1. 前后端联调测试
-2. Qlib 在线模式性能测试
-3. 多进程性能测试
-4. 数据下载稳定性测试
-5. 预测准确性和性能优化
-
----
-
-## 关键技术实现
-
-### FastAPI + MongoDB 异步配置
-```python
-# backend/main.py
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-from .database import MongoDB
-from .api import stock, data, predict, position, log
-
-app = FastAPI()
-
-# CORS 配置
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Vite 默认端口
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# 生命周期事件
-@app.on_event("startup")
-async def startup_event():
-    """应用启动时初始化 MongoDB"""
-    await MongoDB.connect_to_database(
-        uri="mongodb://localhost:27017/",
-        db_name="quant_system_db"
-    )
-    logger.info("MongoDB connected")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """应用关闭时断开 MongoDB"""
-    await MongoDB.close_database()
-    logger.info("MongoDB disconnected")
-
-# 注册路由
-app.include_router(stock.router)
-app.include_router(data.router)
-app.include_router(predict.router)
-app.include_router(position.router)
-app.include_router(log.router)
-```
-
-### Qlib 在线模式初始化
-```python
-import qlib
-from qlib.config import C, MODE_CONF
-from qlib.constant import REG_CN
-
-# 使用在线模式配置
-C.update(MODE_CONF["server"])
-
-# 初始化 Qlib
-mongo_conf = {
-    "task_url": "mongodb://localhost:27017/",
-    "task_db_name": "quant_system_db",
-}
-
-qlib.init(
-    provider_uri="~/.qlib/qlib_data/cn_data",
-    region=REG_CN,
-    mongo=mongo_conf,
-)
-```
-
-### 多进程预测实现（MongoDB + Alpha158）
-```python
-# backend/services/prediction_service.py
-from multiprocessing import Pool
-import pickle
-import qlib
-
-def predict_worker(args):
-    """子进程预测函数"""
-    stock_batch, predict_date, model_pickle, provider_uri = args
-
-    # 子进程独立初始化 Qlib
-    import qlib as qlib_child
-    from qlib.config import C, MODE_CONF
-    from qlib.constant import REG_CN_CHILD
-    from qlib.contrib.data.handler import Alpha158
-
-    C.update(MODE_CONF["client"])
-    qlib_child.init(provider_uri=provider_uri, region=REG_CN_CHILD)
-
-    # 反序列化模型
-    model = pickle.loads(model_pickle)
-
-    results = []
-    for code in stock_batch:
-        # Alpha158 特征
-        dataset = Alpha158(
-            instruments=[code],
-            start_time="2015-01-01",
-            end_time=predict_date,
-            fit_start_time="2015-01-01",
-            fit_end_time=predict_date,
-        )
-        df = dataset.prepare("test")
-
-        # 预测
-        if df is not None or df.empty:
-            continue
-
-        pred = model.predict(df)
-        results.append({
-            "code": code,
-            "score": float(pred[0]) if len(pred) > 0 else 0.0,
-        })
-
-    return results
-```
-
-### Alpha158 使用
-```python
-from qlib.contrib.data.handler import Alpha158
-
-# 创建数据集
-dataset = Alpha158(
-    instruments=stocks,
-    start_time="2015-01-01",
-    end_time=predict_date,
-    fit_start_time="2015-01-01",
-    fit_end_time=predict_date,
-)
-
-# 准备特征
-df = dataset.prepare("test")
-# df 包含 158 个 Alpha 因子
-```
-
-### MongoDB 异步查询示例
-```python
-from motor.motor_asyncio import AsyncIOMotorClient
-from bson import ObjectId
-
-# 连接
-client = AsyncIOMotorClient("mongodb://localhost:27017/")
-database = client["quant_system_db"]
-
-# 查询
-cursor = database.stocks.find({"enabled": True})
-stocks = await cursor.to_list(length=None)
-
-# 插入
-result = await database.stocks.insert_one({"code": "sh600000", "name": "平安银行"})
-stock_id = str(result.inserted_id)
-
-# 更新
-result = await database.stocks.update_one(
-    {"code": "sh600000"},
-    {"$set": {"enabled": False}}
-)
-
-# 删除
-result = await database.stocks.delete_one({"code": "sh600000"})
-
-# 排序
-cursor = database.predictions.find({}).sort("score", -1).limit(100)
-predictions = await cursor.to_list(length=None)
-```
-
----
-
-## 文件清单
-
-### 需要创建的文件
-
-#### 后端
-- `examples/official/backend/main.py`
-- `examples/official/backend/config.py`
-- `examples/official/backend/database.py`
-- `examples/official/backend/models.py`
-- `examples/official/backend/api/__init__.py`
-- `examples/official/backend/api/stock.py`
-- `examples/official/backend/api/data.py`
-- `examples/official/backend/api/predict.py`
-- `examples/official/backend/api/position.py`
-- `examples/official/backend/api/log.py`
-- `examples/official/backend/services/__init__.py`
-- `examples/official/backend/services/data_service.py`
-- `examples/official/backend/services/prediction_service.py`
-- `examples/official/backend/services/qlib_service.py`
-- `examples/official/backend/services/mongo_service.py`
-- `examples/official/backend/workers/__init__.py`
-- `examples/official/backend/workers/predict_worker.py`
-- `examples/official/backend/requirements.txt`
-
-#### 前端
-- `examples/official/frontend/index.html`
-- `examples/official/frontend/package.json`
-- `examples/official/frontend/vite.config.js`
-- `examples/official/frontend/src/main.js`
-- `examples/official/frontend/src/App.vue`
-- `examples/official/frontend/src/components/StockManager.vue`
-- `examples/official/frontend/src/components/DataManager.vue`
-- `examples/official/frontend/src/components/PredictResult.vue`
-- `examples/official/frontend/src/components/PositionManager.vue`
-- `examples/official/frontend/src/api/stock.js`
-- `examples/official/frontend/src/api/data.js`
-- `examples/official/frontend/src/api/predict.js`
-- `examples/official/frontend/src/api/position.js`
-- `examples/official/frontend/src/utils/request.js`
-
-#### 配置
-- `examples/official/README.md`
-- `examples/official/config.yaml`
-- `examples/official/A500.csv`（需要用户提供或从网上下载）
-
-### 参考文件
 - `/Users/samlty/code/qlib/examples/TencentDataSource/tencent_data_source.py`
 - `/Users/samlty/code/qlib/examples/TencentDataSource/predict_stocks.py`
-- `/Users/samlty/code/qlib/examples/TencentDataSource/workflow.py`
 - `/Users/samlty/code/qlib/examples/online_srv/online_management_simulate.py`（在线模式）
 - `/Users/samlty/code/qlib/examples/model_rolling/task_manager_rolling.py`（MongoDB + TaskManager）
 - `/Users/samlty/code/qlib/qlib/contrib/data/handler.py`（Alpha158）
 - `/Users/samlty/code/qlib/qlib/config.py`（MODE_CONF）
-
----
+- `/Users/samlty/code/qlib/examples/official/trade_agent.md`（交易代理接口文档）
 
 ## 注意事项
 
@@ -1600,45 +2009,7 @@ predictions = await cursor.to_list(length=None)
 8. **前端开发模式**: Vite 运行在 5173 端口，需要配置代理
 9. **日志文件权限**: 确保 log 目录有写权限
 10. **数据备份**: 定期备份 MongoDB 数据和 Qlib 数据
+11. **代理状态检查**: 在执行交易前检查代理是否可用
+12. **持仓同步**: 每次同步操作会清空并重新导入
 
----
-
-## 部署说明
-
-### 环境要求
-- Python 3.8+
-- MongoDB 5.0+
-- Redis 6.0+（Qlib 在线模式缓存）
-- Node.js 18+
-
-### 启动步骤
-1. 启动 MongoDB 服务
-2. 启动 Redis 服务
-3. 安装后端依赖：
-   ```bash
-   cd examples/official/backend
-   pip install -r requirements.txt
-   ```
-4. 启动后端：
-   ```bash
-   uvicorn main:app --host 0.0.0.0 --port 8000
-   ```
-5. 安装前端依赖：
-   ```bash
-   cd examples/official/frontend
-   npm install
-   ```
-6. 启动前端（开发模式）：
-   ```bash
-   npm run dev
-   ```
-
----
-
-## 开发顺序建议
-
-1. **Week 1**: 项目初始化 + MongoDB 配置 + Qlib 在线模式
-2. **Week 2**: 代码管理 + 数据管理（腾讯 API 集成）
-3. **Week 3**: 预测功能 + 多进程优化 + 持仓筛选
-4. **Week 4**: 持仓管理功能（导入导出、添加删除修改）
-5. **Week 5**: 日志管理 + 集成测试
+计划包含详细的代码示例、API 设计、MongoDB 异步操作、交易代理集成、多进程实现方式、以及完整的文件列表。
