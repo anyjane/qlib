@@ -5,8 +5,8 @@ from contextlib import asynccontextmanager
 from loguru import logger
 import sys
 
-from .config import settings
-from .database import MongoDB
+from config import settings
+from database import MongoDB
 
 
 # Configure loguru
@@ -85,7 +85,7 @@ async def health_check():
 # API Routers
 # ============================================================================
 
-from .api import stock, data, predict, position, agent, log
+from api import stock, data, predict, position, agent, log
 
 app.include_router(stock.router)
 app.include_router(data.router)
@@ -99,7 +99,7 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
-        "backend.main:app",
+        "main:app",
         host=settings.HOST,
         port=settings.PORT,
         reload=settings.DEBUG,
