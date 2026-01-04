@@ -10,6 +10,9 @@ from config import settings
 from database import MongoDB
 
 
+__all__ = ['TencentDataService', 'standardize_stock_codes']
+
+
 class TencentDataService:
     """腾讯数据下载服务"""
 
