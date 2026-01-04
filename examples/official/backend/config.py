@@ -1,5 +1,5 @@
 """Backend configuration for Quantitative Investment Management System"""
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings
 from typing import Optional
 import os
 
