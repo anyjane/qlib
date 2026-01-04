@@ -18,7 +18,7 @@ dist/
 .vim
 .nvimrc
 .vscode
-
+.venv_mac
 qlib/VERSION.txt
 qlib/data/_libs/expanding.cpp
 qlib/data/_libs/rolling.cpp
