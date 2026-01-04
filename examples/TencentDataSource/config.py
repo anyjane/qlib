@@ -75,6 +75,7 @@ PORT_ANALYSIS_CONFIG = {
             "n_drop": 2,
             "verbose": True,
             "max_reallocation_rounds": 3,
+            "log_prediction_details": True,  # 是否输出详细预测日志
         },
     },
     "backtest": {
@@ -96,4 +97,5 @@ PORT_ANALYSIS_CONFIG = {
 LOGGING_CONFIG = {
     "level": "INFO",  # DEBUG, INFO, WARNING, ERROR
     "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "log_prediction_details": False,  # 是否输出详细预测日志
 }

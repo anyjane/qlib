@@ -84,6 +84,7 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
         forbid_all_trade_at_limit: bool = True,
         verbose: bool = True,
         max_reallocation_rounds: int = 3,
+        log_prediction_details: bool = False,
         **kwargs,
     ):
         super().__init__(
@@ -99,6 +100,7 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
 
         self.verbose = verbose
         self.max_reallocation_rounds = max_reallocation_rounds
+        self.log_prediction_details = log_prediction_details
         self._trade_unit = 100  # Minimum trading unit for Chinese A-shares
 
     def _allocate_to_buy_stocks(
@@ -367,6 +369,40 @@ class TopkDropoutWithReallocation(TopkDropoutStrategy):
         current_stock_list = current_temp.get_stock_list()
         cash = current_temp.get_cash()
         logger.info(f"Initial cash (before sell orders): {cash:,.2f} 元")
+
+        # Log detailed prediction information if enabled
+        if self.log_prediction_details:
+            logger.info("=" * 80)
+            logger.info(f"Prediction Details for {trade_start_time.date()}:")
+            logger.info("=" * 80)
+
+            # Prediction statistics
+            logger.info("Prediction Statistics:")
+            logger.info(f"  Total Predictions: {len(pred_score)}")
+            logger.info(f"  Max Score: {pred_score.max():.4f}")
+            logger.info(f"  Min Score: {pred_score.min():.4f}")
+            logger.info(f"  Mean Score: {pred_score.mean():.4f}")
+            logger.info(f"  Median Score: {pred_score.median():.4f}")
+            logger.info(f"  Std Dev: {pred_score.std():.4f}")
+
+            # TopK stocks
+            topk_stocks = pred_score.sort_values(ascending=False).head(self.topk)
+            logger.info(f"\nTop {self.topk} Stocks by Prediction Score:")
+            for rank, (stock_id, score) in enumerate(topk_stocks.items(), 1):
+                logger.info(f"  [{rank:2d}] {stock_id}: {score:.4f}")
+
+            # Current holdings
+            logger.info(f"\nCurrent Holdings ({len(current_stock_list)} stocks):")
+            if current_stock_list:
+                held_scores = pred_score.reindex(current_stock_list).sort_values(ascending=False)
+                for stock_id, score in held_scores.items():
+                    if pd.notna(score):
+                        rank = (pred_score > score).sum() + 1
+                        logger.info(f"  {stock_id}: {score:.4f} (Rank: {int(rank)})")
+            else:
+                logger.info("  No holdings")
+
+            logger.info("=" * 80)
 
         # Stock selection logic - IDENTICAL to original strategy
         if self.only_tradable:
