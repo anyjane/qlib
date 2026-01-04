@@ -19,7 +19,7 @@ dist/
 .nvimrc
 .vscode
 .venv_mac
-venv
+.venv
 node_modules
 qlib/VERSION.txt
 qlib/data/_libs/expanding.cpp
