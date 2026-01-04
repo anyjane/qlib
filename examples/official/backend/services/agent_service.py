@@ -4,8 +4,8 @@ from typing import Dict, List, Optional
 from datetime import datetime
 from loguru import logger
 
-from ..database import MongoDB
-from ..models import AgentConfigCreate
+from database import MongoDB
+from models import AgentConfigCreate
 
 
 class AgentService:

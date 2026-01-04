@@ -4,8 +4,8 @@ from typing import List, Optional
 from datetime import datetime
 from loguru import logger
 
-from ..database import MongoDB
-from ..services.data_service import TencentDataService
+from database import MongoDB
+from services.data_service import TencentDataService
 
 router = APIRouter(prefix="/api/data", tags=["Data"])
 

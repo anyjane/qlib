@@ -3,7 +3,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from loguru import logger
-from ..config import settings
+from config import settings
 
 
 class MongoDB:

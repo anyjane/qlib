@@ -6,8 +6,8 @@ import requests
 import pandas as pd
 from loguru import logger
 
-from ..config import settings
-from ..database import MongoDB
+from config import settings
+from database import MongoDB
 
 
 class TencentDataService:

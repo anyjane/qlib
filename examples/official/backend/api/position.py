@@ -4,8 +4,8 @@ from typing import List, Optional
 from datetime import datetime
 from loguru import logger
 
-from ..database import MongoDB
-from ..models import PositionCreate, PositionUpdate
+from database import MongoDB
+from models import PositionCreate, PositionUpdate
 
 router = APIRouter(prefix="/api/positions", tags=["Positions"])
 

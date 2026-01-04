@@ -4,8 +4,8 @@ from typing import List
 from datetime import datetime
 from loguru import logger
 
-from ..database import MongoDB
-from ..models import AgentConfigCreate, AgentAssetInfo
+from database import MongoDB
+from models import AgentConfigCreate, AgentAssetInfo
 
 router = APIRouter(prefix="/api/agent", tags=["Agent"])
 
