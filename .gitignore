@@ -20,6 +20,7 @@ dist/
 .vscode
 .venv_mac
 .venv
+qlib_data
 node_modules
 qlib/VERSION.txt
 qlib/data/_libs/expanding.cpp

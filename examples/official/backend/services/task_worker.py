@@ -62,33 +62,72 @@ def init_worker_process():
 
 def execute_data_download_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
     """
-    执行数据下载任务（在工作进程中同步执行）
+    执行数据下载任务（使用多线程并行下载）
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
     task_type = task_params.get("task_type")
     task_id = task_params.get("task_id")
     start_date = task_params.get("start_date", "2015-01-01")
     end_date = task_params.get("end_date")
     stocks = task_params.get("stocks", [])
+    
+    # 并行下载的线程数
+    max_workers = 8
 
-    logger.info(f"Executing data download task {task_id}")
+    logger.info(f"Executing data download task {task_id} with {max_workers} parallel workers")
 
     try:
         from services.data_service import TencentDataService
 
-        logger.info(f"Task {task_id}: Starting data download...")
+        logger.info(f"Task {task_id}: Starting parallel data download for {len(stocks)} stocks...")
 
-        # 执行数据下载（直接同步调用，不使用 asyncio）
-        result = TencentDataService.download_from_tencent(
-            stocks=TencentDataService.standardize_stock_codes(stocks),
-            start=start_date,
-            end=end_date
-        )
+        # 标准化股票代码
+        standardized_stocks = TencentDataService.standardize_stock_codes(stocks)
+        
+        # 定义单个股票下载函数
+        def download_single_stock(code: str) -> tuple:
+            """下载单个股票数据，返回 (code, result_dict)"""
+            try:
+                result = TencentDataService.download_from_tencent(
+                    stocks=[code],
+                    start=start_date,
+                    end=end_date
+                )
+                return (code, result.get(code, {"count": 0}))
+            except Exception as e:
+                logger.error(f"Failed to download {code}: {e}")
+                return (code, {"count": 0, "error": str(e)})
+        
+        # 使用线程池并行下载
+        all_results = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有下载任务
+            future_to_code = {
+                executor.submit(download_single_stock, code): code 
+                for code in standardized_stocks
+            }
+            
+            # 收集结果
+            completed = 0
+            total = len(standardized_stocks)
+            for future in as_completed(future_to_code):
+                code = future_to_code[future]
+                try:
+                    result_code, result_data = future.result()
+                    all_results[result_code] = result_data
+                    completed += 1
+                    logger.info(f"Task {task_id}: Downloaded {completed}/{total}: {code}")
+                except Exception as e:
+                    logger.error(f"Task {task_id}: Exception for {code}: {e}")
+                    all_results[code] = {"count": 0, "error": str(e)}
+                    completed += 1
 
-        logger.info(f"Task {task_id}: Saving data to Qlib format...")
+        logger.info(f"Task {task_id}: All downloads completed, saving to Qlib format...")
 
-        # 保存数据到 Qlib 格式（使用 dump_fix 模式）
+        # 保存数据到 Qlib 格式
         save_result = TencentDataService.save_data_to_qlib_format(
-            data_dict=result,
+            data_dict=all_results,
             download_ranges=start_date,
             end_date=end_date,
             use_update_mode=False
@@ -99,7 +138,7 @@ def execute_data_download_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
         # 解析结果，提取成功和失败的股票
         downloaded_stocks = []
         failed_stocks = []
-        for code, data in result.items():
+        for code, data in all_results.items():
             if data.get("count", 0) > 0:
                 downloaded_stocks.append(code)
             else:
@@ -110,7 +149,7 @@ def execute_data_download_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
             "task_type": task_type,
             "status": "completed",
             "progress": 100.0,
-            "message": "Data download completed successfully",
+            "message": f"Data download completed: {len(downloaded_stocks)} success, {len(failed_stocks)} failed",
             "downloaded_stocks": downloaded_stocks,
             "failed_stocks": failed_stocks,
             "completed_at": datetime.now().isoformat()
@@ -129,35 +168,74 @@ def execute_data_download_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
 
 def execute_data_update_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
     """
-    执行数据更新任务（在工作进程中同步执行）
+    执行数据更新任务（使用多线程并行下载）
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
     task_type = task_params.get("task_type")
     task_id = task_params.get("task_id")
     stocks = task_params.get("stocks", [])
+    
+    # 并行下载的线程数
+    max_workers = 8
 
-    logger.info(f"Executing data update task {task_id}")
+    logger.info(f"Executing data update task {task_id} with {max_workers} parallel workers")
 
     try:
         from services.data_service import TencentDataService
 
-        logger.info(f"Task {task_id}: Starting data update...")
+        logger.info(f"Task {task_id}: Starting parallel data update for {len(stocks)} stocks...")
 
-        # 执行数据更新（直接同步调用，不使用 asyncio）
         # 更新任务默认获取最近 90 天的数据
         end_date = datetime.now().strftime("%Y-%m-%d")
         start_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
 
-        result = TencentDataService.download_from_tencent(
-            stocks=TencentDataService.standardize_stock_codes(stocks),
-            start=start_date,
-            end=end_date
-        )
+        # 标准化股票代码
+        standardized_stocks = TencentDataService.standardize_stock_codes(stocks)
+        
+        # 定义单个股票下载函数
+        def download_single_stock(code: str) -> tuple:
+            """下载单个股票数据，返回 (code, result_dict)"""
+            try:
+                result = TencentDataService.download_from_tencent(
+                    stocks=[code],
+                    start=start_date,
+                    end=end_date
+                )
+                return (code, result.get(code, {"count": 0}))
+            except Exception as e:
+                logger.error(f"Failed to update {code}: {e}")
+                return (code, {"count": 0, "error": str(e)})
+        
+        # 使用线程池并行下载
+        all_results = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有下载任务
+            future_to_code = {
+                executor.submit(download_single_stock, code): code 
+                for code in standardized_stocks
+            }
+            
+            # 收集结果
+            completed = 0
+            total = len(standardized_stocks)
+            for future in as_completed(future_to_code):
+                code = future_to_code[future]
+                try:
+                    result_code, result_data = future.result()
+                    all_results[result_code] = result_data
+                    completed += 1
+                    logger.info(f"Task {task_id}: Updated {completed}/{total}: {code}")
+                except Exception as e:
+                    logger.error(f"Task {task_id}: Exception for {code}: {e}")
+                    all_results[code] = {"count": 0, "error": str(e)}
+                    completed += 1
 
-        logger.info(f"Task {task_id}: Saving data to Qlib format...")
+        logger.info(f"Task {task_id}: All updates completed, saving to Qlib format...")
 
         # 保存数据到 Qlib 格式（使用更新模式）
         save_result = TencentDataService.save_data_to_qlib_format(
-            data_dict=result,
+            data_dict=all_results,
             download_ranges=start_date,
             end_date=end_date,
             use_update_mode=True
@@ -168,7 +246,7 @@ def execute_data_update_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
         # 解析结果，提取成功和失败的股票
         updated_stocks = []
         failed_stocks = []
-        for code, data in result.items():
+        for code, data in all_results.items():
             if data.get("count", 0) > 0:
                 updated_stocks.append(code)
             else:
@@ -179,7 +257,7 @@ def execute_data_update_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
             "task_type": task_type,
             "status": "completed",
             "progress": 100.0,
-            "message": "Data update completed successfully",
+            "message": f"Data update completed: {len(updated_stocks)} success, {len(failed_stocks)} failed",
             "updated_stocks": updated_stocks,
             "failed_stocks": failed_stocks,
             "completed_at": datetime.now().isoformat()
