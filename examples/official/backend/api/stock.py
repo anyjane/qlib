@@ -166,6 +166,7 @@ async def initialize_stocks_from_csv():
         # 读取 A500.csv
         df = pd.read_csv(csv_path)
         stock_codes = df['成份券代码Constituent Code'].tolist()
+        stock_names = df['成份券名称Constituent Name'].tolist()
 
         # 标准化股票代码格式
         standardized_codes = standardize_stock_codes(stock_codes)
@@ -175,7 +176,7 @@ async def initialize_stocks_from_csv():
 
         # 批量导入新股票
         imported = 0
-        for code, name in zip(standardized_codes, stock_codes):
+        for code, name in zip(standardized_codes, stock_names):
             await MongoDB.insert_stock({
                 "code": code,
                 "name": name,
