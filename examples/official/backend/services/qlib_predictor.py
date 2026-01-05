@@ -32,6 +32,7 @@ import qlib
 from qlib.constant import REG_CN
 from qlib.utils import init_instance_by_config
 from qlib.data import D
+from qlib.backtest.signal import ModelSignal
 
 # 全局 Qlib 初始化状态 - 确保整个模块只初始化一次
 _QLIB_INITIALIZED = False
@@ -220,17 +221,54 @@ class QlibPredictor:
 
         predict_dataset = init_instance_by_config(predict_dataset_config)
 
-        # 执行预测
-        predictions = model.predict(predict_dataset, segment='test')
+        # 使用 ModelSignal 获取预测分数（与 generate_trade_decision 保持一致）
+        model_signal = ModelSignal(model, dataset=predict_dataset)
+        prediction_score = model_signal.get_signal(
+            start_time=pd.Timestamp(predict_date),
+            end_time=pd.Timestamp(predict_date)
+        )
 
-        # 解析预测结果
+        # 检查预测结果是否为空
+        if prediction_score is None or len(prediction_score) == 0:
+            error_msg = f"No prediction results for date {predict_date}. The dataset may be empty or the prediction date is invalid."
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        # 处理预测结果格式
+        if isinstance(prediction_score, pd.DataFrame):
+            prediction_score = prediction_score.iloc[:, 0]
+
+        # 解析预测结果 - 兼容不同的索引结构
         results = []
-        for (date, stock_code), prediction in zip(predictions.index, predictions):
-            results.append({
-                'date': date,
-                'stock_code': stock_code,
-                'prediction': float(prediction)
-            })
+        if isinstance(prediction_score.index, pd.MultiIndex):
+            # MultiIndex: 检查索引名称来判断结构
+            if len(prediction_score.index.names) == 2:
+                # 假设是 (date, stock_code) 或类似结构
+                for idx, prediction in prediction_score.items():
+                    date, stock_code = idx
+                    results.append({
+                        'date': date,
+                        'stock_code': stock_code,
+                        'prediction': float(prediction)
+                    })
+            else:
+                # 其他情况，使用 predict_date
+                for idx, prediction in prediction_score.items():
+                    # 提取股票代码（通常是最后一个级别）
+                    stock_code = idx[-1] if isinstance(idx, tuple) else idx
+                    results.append({
+                        'date': predict_date,
+                        'stock_code': stock_code,
+                        'prediction': float(prediction)
+                    })
+        else:
+            # 单层索引: 假设 index 是股票代码
+            for stock_code, prediction in prediction_score.items():
+                results.append({
+                    'date': predict_date,
+                    'stock_code': stock_code,
+                    'prediction': float(prediction)
+                })
 
         result_df = pd.DataFrame(results)
 
