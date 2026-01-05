@@ -9,6 +9,7 @@ import pandas as pd
 from database import MongoDB
 from services.data_service import TencentDataService
 from services.task_pool import get_task_pool_manager
+from websocket_manager import manager
 
 router = APIRouter(prefix="/api/data", tags=["Data"])
 

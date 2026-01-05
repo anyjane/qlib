@@ -143,6 +143,21 @@ class TaskQueue:
         return self.task_queue.qsize()
 
 
+def _worker_wrapper(task_params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Module-level worker wrapper function for process pool.
+    This must be at module level (not a method) to be picklable.
+    
+    Args:
+        task_params: Task parameters dictionary
+        
+    Returns:
+        Task result dictionary
+    """
+    from .task_worker import worker_main
+    return worker_main(task_params)
+
+
 class TaskDispatcher:
     """任务分发器，负责从队列中获取任务并分发到工作进程"""
     
@@ -204,7 +219,7 @@ class TaskDispatcher:
                 self.logger.info(f"Dispatching task {task_id} to worker pool")
                 
                 self.pool.apply_async(
-                    self._worker_wrapper,
+                    _worker_wrapper,
                     args=(task_params,),
                     callback=self._task_callback,
                     error_callback=self._task_error_callback
@@ -217,21 +232,6 @@ class TaskDispatcher:
         
         # 线程退出前清理
         self.logger.debug("Dispatch loop exiting")
-    
-    def _worker_wrapper(self, task_params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        工作进程包装函数
-        用于在主进程和工作进程之间传递数据
-        
-        Args:
-            task_params: 任务参数
-            
-        Returns:
-            任务结果
-        """
-        from .task_worker import worker_main
-        
-        return worker_main(task_params)
     
     def _task_callback(self, result: Dict[str, Any]):
         """
@@ -247,26 +247,9 @@ class TaskDispatcher:
         task_id = result.get("task_id")
         self.logger.info(f"Task {task_id} completed with status: {result.get('status')}")
 
-        # 直接更新到数据库和 WebSocket（在回调线程中）
+        # 使用同步方法更新数据库（避免事件循环冲突）
         try:
-            from database import MongoDB
-            from models import TaskStatus
-
-            task_type = result.get("task_type")
-
-            # 创建新的事件循环来运行异步操作
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                # 根据任务类型更新不同的集合
-                if task_type == "data_download" or task_type == "data_update":
-                    loop.run_until_complete(self._update_to_db_and_ws(result))
-                elif task_type == "prediction":
-                    loop.run_until_complete(self._update_to_db_and_ws(result))
-            finally:
-                loop.close()
-                asyncio.set_event_loop(None)
-
+            self._update_to_db_sync(result)
         except Exception as e:
             if self.running:
                 self.logger.error(f"Failed to handle task result: {e}")
@@ -292,92 +275,80 @@ class TaskDispatcher:
             "completed_at": None
         }
 
+        # 使用同步方法更新数据库
         try:
-            from database import MongoDB
-            from websocket_manager import WebSocketManager
-
-            # 创建新的事件循环来运行异步操作
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(self._update_error_to_db_and_ws(result))
-            finally:
-                loop.close()
-                asyncio.set_event_loop(None)
+            self._update_error_to_db_sync(result)
         except Exception as e:
             if self.running:
                 self.logger.error(f"Failed to handle task error: {e}")
     
-    async def _update_to_db_and_ws(self, result: Dict[str, Any]):
+    def _update_to_db_sync(self, result: Dict[str, Any]):
         """
-        更新结果到数据库和 WebSocket
+        同步更新结果到数据库（使用 pymongo）
         
-        Args:
-            result: 任务结果
+        由于回调在不同线程中运行，需要使用同步 MongoDB 客户端
         """
-        from database import MongoDB
-        from websocket_manager import WebSocketManager
+        from pymongo import MongoClient
+        from config import settings
         
         task_id = result.get("task_id")
         task_type = result.get("task_type")
         
         try:
+            # 创建同步 MongoDB 连接
+            client = MongoClient(settings.MONGODB_URL)
+            db = client[settings.MONGODB_DB_NAME]
+            
+            update_data = {
+                "$set": {
+                    "status": result.get("status"),
+                    "progress": result.get("progress"),
+                    "message": result.get("message"),
+                    "error": result.get("error"),
+                    "completed_at": result.get("completed_at"),
+                    "updated_at": __import__('datetime').datetime.utcnow()
+                }
+            }
+            
             # 根据任务类型更新不同的集合
             if task_type == "data_download" or task_type == "data_update":
-                await MongoDB.update_data_task(task_id, {
-                    "status": result.get("status"),
-                    "progress": result.get("progress"),
-                    "message": result.get("message"),
-                    "error": result.get("error"),
-                    "completed_at": result.get("completed_at")
-                })
+                db.data_tasks.update_one({"task_id": task_id}, update_data)
             elif task_type == "prediction":
-                await MongoDB.update_prediction_task(task_id, {
-                    "status": result.get("status"),
-                    "progress": result.get("progress"),
-                    "message": result.get("message"),
-                    "error": result.get("error"),
-                    "completed_at": result.get("completed_at")
-                })
+                db.prediction_tasks.update_one({"task_id": task_id}, update_data)
             
-            # 通过 WebSocket 推送任务状态更新
-            ws_manager = WebSocketManager()
-            await ws_manager.broadcast_task_update({
-                "task_id": task_id,
-                "task_type": task_type,
-                "status": result.get("status"),
-                "progress": result.get("progress"),
-                "message": result.get("message"),
-                "error": result.get("error")
-            })
+            self.logger.debug(f"Task {task_id} result updated in database")
             
-            self.logger.debug(f"Task {task_id} result updated")
+            client.close()
             
         except Exception as e:
-            self.logger.error(f"Failed to update task {task_id}: {e}")
+            self.logger.error(f"Failed to update task {task_id} in database: {e}")
     
-    async def _update_error_to_db_and_ws(self, result: Dict[str, Any]):
+    def _update_error_to_db_sync(self, result: Dict[str, Any]):
         """
-        更新错误到数据库和 WebSocket
-        
-        Args:
-            result: 错误结果
+        同步更新错误到数据库（使用 pymongo）
         """
-        from database import MongoDB
-        from websocket_manager import WebSocketManager
+        from pymongo import MongoClient
+        from config import settings
         
         task_id = result.get("task_id")
         
         try:
-            # 通过 WebSocket 推送错误
-            ws_manager = WebSocketManager()
-            await ws_manager.broadcast_task_update({
-                "task_id": task_id,
-                "status": "failed",
-                "error": result.get("error")
-            })
+            client = MongoClient(settings.MONGODB_URL)
+            db = client[settings.MONGODB_DB_NAME]
             
-            self.logger.debug(f"Task {task_id} error updated")
+            # 尝试更新数据任务
+            db.data_tasks.update_one(
+                {"task_id": task_id},
+                {"$set": {
+                    "status": "failed",
+                    "error": result.get("error"),
+                    "updated_at": __import__('datetime').datetime.utcnow()
+                }}
+            )
+            
+            self.logger.debug(f"Task {task_id} error updated in database")
+            
+            client.close()
             
         except Exception as e:
             self.logger.error(f"Failed to update task error {task_id}: {e}")

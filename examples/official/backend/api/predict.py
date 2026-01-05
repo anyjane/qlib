@@ -9,7 +9,7 @@ from database import MongoDB
 from services.qlib_predictor import QlibPredictor
 from services.task_pool import get_task_pool_manager
 from config import settings
-from main import manager
+from websocket_manager import manager
 
 router = APIRouter(prefix="/api/predict", tags=["Predict"])
 

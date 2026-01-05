@@ -43,9 +43,9 @@ async def lifespan(app: FastAPI):
 
     # Startup
     logger.info("Starting Quantitative Investment Management System...")
-    await MongoDB.connect_to_mongodb()
 
     # 初始化任务进程池（TaskPoolManager 是单例，initialize_task_pool 返回实例）
+    # 必须在 MongoDB 连接之前初始化进程池，避免子进程继承不可序列化的 MongoDB 连接对象
     logger.info("Initializing task process pool...")
     task_pool_manager = initialize_task_pool(
         pool_size=4,  # 可以根据需要调整进程数
@@ -53,6 +53,9 @@ async def lifespan(app: FastAPI):
         enable_progress_queue=True
     )
     logger.info("Task process pool initialized successfully")
+
+    # MongoDB 连接必须在进程池初始化之后进行
+    await MongoDB.connect_to_mongodb()
 
     yield
 

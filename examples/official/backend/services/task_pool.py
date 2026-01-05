@@ -77,13 +77,17 @@ class TaskPoolManager:
             self.logger.info(f"Starting TaskPoolManager with pool_size={self.pool_size}")
 
             # 创建进程池，使用初始化函数在每个工作进程中初始化 Qlib
-            self.pool = Pool(
+            # 使用 spawn 方式启动进程，避免 fork 方式导致的 MongoDB 连接对象继承问题
+            import multiprocessing
+            ctx = multiprocessing.get_context('spawn')
+
+            self.pool = ctx.Pool(
                 processes=self.pool_size,
                 initializer=init_worker_process,
                 initargs=()
             )
 
-            self.logger.info(f"Process pool created with {self.pool_size} workers")
+            self.logger.info(f"Process pool created with {self.pool_size} workers (spawn mode)")
 
             # 创建并启动任务分发器
             self.dispatcher = TaskDispatcher(self.task_queue, self.pool)
@@ -147,34 +151,34 @@ class TaskPoolManager:
     def submit_task(self, task_params: Dict[str, Any]) -> bool:
         """
         提交任务到进程池
-        
+
         Args:
             task_params: 任务参数字典，必须包含 task_type 和 task_id
-            
+
         Returns:
             是否成功提交任务
         """
         if not self.initialized:
             self.logger.error("TaskPoolManager not started, cannot submit task")
             return False
-        
+
         # 检查必需的参数
         if "task_type" not in task_params or "task_id" not in task_params:
             self.logger.error("Missing required parameters: task_type or task_id")
             return False
-        
-        # 添加进度队列到任务参数中（如果启用）
-        if self.enable_progress_queue and self.progress_queue:
-            task_params["progress_queue"] = self.progress_queue
-        
+
+        # 注意：不再添加 progress_queue 到 task_params 中
+        # 因为进度队列包含不可序列化的对象（如 MongoDB 连接）
+        # 进度报告改为通过主进程处理工作进程返回的结果
+
         # 将任务放入队列
         success = self.task_queue.put_task(task_params)
-        
+
         if success:
             self.logger.info(f"Task {task_params['task_id']} submitted successfully")
         else:
             self.logger.error(f"Failed to submit task {task_params['task_id']}")
-        
+
         return success
     
     def get_pool_status(self) -> Dict[str, Any]:

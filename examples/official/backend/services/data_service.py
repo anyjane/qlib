@@ -11,23 +11,9 @@ import numpy as np
 from loguru import logger
 import subprocess
 
-from database import MongoDB
-
-# 尝试导入 config，如果成功则使用 settings（主进程中）
-# 如果失败或在工作进程中，使用环境变量
-try:
-    from config import settings as _settings
-    # 在主进程中使用 config.settings
-    QLIB_PROVIDER_URI = _settings.QLIB_PROVIDER_URI
-    _using_config_settings = True
-except:
-    pass
-    # 在工作进程中，使用环境变量避免序列化问题
-    # _BACKEND_DIR = Path(__file__).parent
-    # _DEFAULT_QLIB_PROVIDER_URI = str(_BACKEND_DIR / "qlib_data")
-    # QLIB_PROVIDER_URI = os.environ.get('QLIB_PROVIDER_URI', _DEFAULT_QLIB_PROVIDER_URI)
-    # _using_config_settings = False
-
+# 统一从 config 模块获取配置
+from config import settings
+QLIB_PROVIDER_URI = settings.QLIB_PROVIDER_URI
 
 __all__ = ['TencentDataService', 'standardize_stock_codes']
 
@@ -96,6 +82,7 @@ class TencentDataService:
     @staticmethod
     async def create_download_task(start_date: str, end_date: str, stocks: List[str]) -> str:
         """创建下载任务并保存到 MongoDB"""
+        from database import MongoDB
         task_id = f"download_{datetime.now().timestamp()}"
         await MongoDB.insert_data_task({
             "task_id": task_id,
@@ -111,6 +98,7 @@ class TencentDataService:
     @staticmethod
     async def create_update_task(stocks: List[str]) -> str:
         """创建更新任务并保存到 MongoDB"""
+        from database import MongoDB
         task_id = f"update_{datetime.now().timestamp()}"
         await MongoDB.insert_data_task({
             "task_id": task_id,
@@ -135,7 +123,7 @@ class TencentDataService:
             return None
 
     @staticmethod
-    async def download_from_tencent(stocks: List[str], start: str, end: str) -> dict:
+    def download_from_tencent(stocks: List[str], start: str, end: str) -> dict:
         """
         从腾讯 API 下载数据（支持分页）
 
@@ -432,9 +420,26 @@ class TencentDataService:
             # 由于 dump_bin 有复杂的依赖，使用 subprocess 调用更可靠
             dump_script = Path(__file__).parent.parent.parent.parent.parent / "scripts" / "dump_bin.py"
 
-            # 根据模式选择 dump_fix（新增）或 dump_update（更新）
-            mode = "dump_update" if use_update_mode else "dump_fix"
-            logger.info(f"使用 {mode} 模式转换数据")
+            # 检查 calendar 文件是否存在（用于判断是否为首次数据导入）
+            calendar_file = qlib_dir / "calendars" / "day.txt"
+            instruments_file = qlib_dir / "instruments" / "all.txt"
+            
+            # 选择正确的 dump 模式：
+            # - dump_all: 首次导入，创建所有基础文件（calendars, instruments）
+            # - dump_fix: 添加新股票到现有数据库
+            # - dump_update: 更新现有股票的数据（追加新日期）
+            if not calendar_file.exists() or not instruments_file.exists():
+                # 首次导入数据，使用 dump_all
+                mode = "dump_all"
+                logger.info("首次数据导入，使用 dump_all 模式")
+            elif use_update_mode:
+                # 增量更新现有股票数据
+                mode = "dump_update"
+                logger.info("使用 dump_update 模式进行增量更新")
+            else:
+                # 添加新股票或重新下载
+                mode = "dump_fix"
+                logger.info("使用 dump_fix 模式添加/更新股票数据")
 
             cmd = [
                 sys.executable,
@@ -449,7 +454,7 @@ class TencentDataService:
                 "--max_workers", "1"
             ]
 
-            logger.info(f"执行 dump_fix 命令: {' '.join(cmd)}")
+            logger.info(f"执行 {mode} 命令: {' '.join(cmd)}")
 
             result = subprocess.run(
                 cmd,
@@ -485,56 +490,64 @@ class TencentDataService:
         """
         从文件系统检查股票数据信息（不初始化 Qlib）
 
-        直接检查 Qlib 二进制数据文件是否存在
+        读取 instruments/all.txt 获取日期范围
+        通过二进制文件大小计算数据条数
         """
         try:
             data_path = Path(QLIB_PROVIDER_URI).expanduser()
+            
+            # 标准化代码格式用于匹配（全大写，因为 instruments 文件用大写）
+            code_upper = code.upper()
+            if not code_upper.startswith('SZ') and not code_upper.startswith('SH'):
+                # 如果是 sz000001 格式，转为 SZ000001
+                code_upper = code.upper()
+            
             instrument_path = data_path / "features" / code
-
+            
             if not instrument_path.exists():
                 return {"has_data": False}
 
-            # 检查是否有数据文件（.bin 或 .h5 文件）
-            bin_files = list(instrument_path.glob("**/*.bin"))
-            h5_files = list(instrument_path.glob("**/*.h5"))
-
-            if not bin_files and not h5_files:
+            # 检查是否有数据文件（.bin 文件）
+            bin_files = list(instrument_path.glob("*.bin"))
+            
+            if not bin_files:
                 return {"has_data": False}
 
-            # 获取最早和最晚的数据文件（基于文件名中的日期）
-            all_files = bin_files + h5_files
-            all_files.sort()
+            # 计算数据条数：从 close.day.bin 文件计算
+            # Qlib 二进制格式：4字节起始索引 + N个4字节浮点数
+            record_count = 0
+            close_bin = instrument_path / "close.day.bin"
+            if close_bin.exists():
+                file_size = close_bin.stat().st_size
+                # 减去4字节的起始索引，剩余的每4字节是一条记录
+                record_count = (file_size - 4) // 4 if file_size > 4 else 0
+            
+            # 从 instruments/all.txt 读取日期范围
+            start_date = None
+            end_date = None
+            instruments_file = data_path / "instruments" / "all.txt"
+            
+            if instruments_file.exists():
+                with open(instruments_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        parts = line.split('\t')
+                        if len(parts) >= 3:
+                            # 格式: SZ000009	2015-01-07	2025-12-31
+                            inst_code = parts[0].lower()  # 转为小写比较
+                            if inst_code == code.lower():
+                                start_date = parts[1]
+                                end_date = parts[2]
+                                break
 
-            # 尝试从文件名中提取日期信息
-            dates = []
-            for f in all_files:
-                # Qlib 文件名格式通常包含日期信息
-                stem = f.stem
-                # 简单的日期提取逻辑（可能需要根据实际情况调整）
-                if len(stem) >= 8 and stem[:8].isdigit():
-                    try:
-                        date_str = f"{stem[:4]}-{stem[4:6]}-{stem[6:8]}"
-                        dates.append(pd.Timestamp(date_str))
-                    except:
-                        pass
-
-            if dates:
-                start_date = min(dates)
-                end_date = max(dates)
-                return {
-                    "has_data": True,
-                    "start_date": start_date.strftime("%Y-%m-%d"),
-                    "end_date": end_date.strftime("%Y-%m-%d"),
-                    "count": len(all_files)
-                }
-            else:
-                # 无法从文件名提取日期，但文件存在
-                return {
-                    "has_data": True,
-                    "start_date": None,
-                    "end_date": None,
-                    "count": len(all_files)
-                }
+            return {
+                "has_data": True,
+                "start_date": start_date,
+                "end_date": end_date,
+                "count": record_count
+            }
 
         except Exception as e:
             logger.error(f"Failed to get data info for {code}: {e}")
@@ -543,9 +556,6 @@ class TencentDataService:
     @staticmethod
     async def delete_stock_data(code: str):
         """删除 Qlib 数据文件"""
-        import shutil
-        from pathlib import Path
-
         data_path = Path(QLIB_PROVIDER_URI).expanduser()
 
         # 删除 features 目录下的股票数据（Qlib 的实际数据存储位置）

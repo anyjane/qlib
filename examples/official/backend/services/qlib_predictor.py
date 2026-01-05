@@ -26,11 +26,9 @@ sys.path.insert(0, str(CUR_DIR))
 sys.path.insert(0, str(BACKEND_DIR))
 sys.path.insert(0, str(PROJECT_DIR))
 
-# 导入配置 - 使用环境变量避免序列化问题
-# 不直接导入 config 模块，避免 AuthenticationString 序列化错误
-# 默认路径与 config.py 保持一致：examples/official/backend/qlib_data
-# _DEFAULT_QLIB_PROVIDER_URI = str(BACKEND_DIR / "qlib_data")
-# DEFAULT_SETTINGS_PROVIDER_URI = os.environ.get('QLIB_PROVIDER_URI', _DEFAULT_QLIB_PROVIDER_URI)
+# 导入配置 - 统一从 config 模块获取
+from config import settings
+DEFAULT_SETTINGS_PROVIDER_URI = settings.QLIB_PROVIDER_URI
 
 # 导入 Qlib 相关模块
 from loguru import logger
