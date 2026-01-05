@@ -33,6 +33,10 @@ from qlib.constant import REG_CN
 from qlib.utils import init_instance_by_config
 from qlib.data import D
 
+# 全局 Qlib 初始化状态 - 确保整个模块只初始化一次
+_QLIB_INITIALIZED = False
+_QLIB_PROVIDER_URI = None
+
 # 导入模型配置
 # 直接定义 MODEL_CONFIG，避免导入路径问题
 MODEL_CONFIG = {
@@ -73,10 +77,23 @@ class QlibPredictor:
 
     def _init_qlib(self):
         """初始化 Qlib（延迟初始化）"""
-        if not self._qlib_initialized:
+        global _QLIB_INITIALIZED, _QLIB_PROVIDER_URI
+
+        # 检查全局初始化状态
+        if not _QLIB_INITIALIZED:
             qlib.init(provider_uri=self.provider_uri, region=REG_CN)
+            _QLIB_INITIALIZED = True
+            _QLIB_PROVIDER_URI = self.provider_uri
             self._qlib_initialized = True
             logger.info(f"Qlib initialized with provider_uri: {self.provider_uri}")
+        elif _QLIB_PROVIDER_URI == self.provider_uri:
+            # 已用相同的 provider_uri 初始化过，直接标记为已初始化
+            self._qlib_initialized = True
+            logger.info(f"Qlib already initialized with same provider_uri: {self.provider_uri}")
+        else:
+            # provider_uri 不同，需要重新初始化（这种情况不应该发生）
+            logger.warning(f"Qlib already initialized with different provider_uri: {_QLIB_PROVIDER_URI}, current: {self.provider_uri}")
+            raise ValueError(f"Qlib already initialized with different provider_uri. Please restart the server.")
 
     def determine_train_end_date(self, predict_date: str) -> str:
         """

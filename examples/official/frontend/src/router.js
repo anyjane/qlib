@@ -17,8 +17,8 @@ const routes = [
   },
   {
     path: '/predict',
-    name: 'PredictResult',
-    component: () => import('./components/PredictResult.vue')
+    name: 'PredictionModule',
+    component: () => import('./components/PredictionModule.vue')
   },
   {
     path: '/positions',

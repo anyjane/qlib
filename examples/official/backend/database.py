@@ -308,3 +308,48 @@ class MongoDB:
         """Get all data tasks"""
         cursor = cls.database.data_tasks.find({}, {"_id": 0})
         return await cursor.to_list(length=None)
+
+    # ============================================================================
+    # Prediction Tasks Collection Operations
+    # ============================================================================
+
+    @classmethod
+    async def get_prediction_tasks(cls, limit: int = None) -> List[Dict]:
+        """Get all prediction tasks"""
+        cursor = cls.database.prediction_tasks.find({}, {"_id": 0}).sort("created_at", -1)
+        if limit:
+            cursor = cursor.limit(limit)
+        tasks = await cursor.to_list(length=None)
+        return tasks if tasks else []
+
+    @classmethod
+    async def get_prediction_task(cls, task_id: str) -> Optional[Dict]:
+        """Get prediction task by ID"""
+        task = await cls.database.prediction_tasks.find_one({"task_id": task_id}, {"_id": 0})
+        return task
+
+    @classmethod
+    async def insert_prediction_task(cls, task_dict: Dict):
+        """Insert a prediction task"""
+        await cls.database.prediction_tasks.insert_one(task_dict)
+
+    @classmethod
+    async def update_prediction_task(cls, task_id: str, update_dict: Dict):
+        """Update prediction task"""
+        await cls.database.prediction_tasks.update_one(
+            {"task_id": task_id},
+            {"$set": update_dict}
+        )
+
+    @classmethod
+    async def delete_prediction_task(cls, task_id: str) -> int:
+        """Delete prediction task"""
+        result = await cls.database.prediction_tasks.delete_one({"task_id": task_id})
+        return result.deleted_count
+
+    @classmethod
+    async def get_prediction_results(cls, task_id: str) -> List[Dict]:
+        """Get prediction results by task_id"""
+        query = {"task_id": task_id}
+        predictions = await cls.get_predictions(query=query, sort=[("score", -1)], limit=None)
+        return predictions

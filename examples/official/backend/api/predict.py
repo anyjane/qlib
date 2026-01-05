@@ -17,6 +17,11 @@ class PredictRequest(BaseModel):
     stocks: Optional[List[str]] = None
 
 
+class LockRequest(BaseModel):
+    """锁定状态请求体"""
+    is_locked: bool
+
+
 async def execute_predict_task(task_id: str, predict_date: str, stocks: List[str]):
     """
     后台执行预测任务
@@ -30,7 +35,7 @@ async def execute_predict_task(task_id: str, predict_date: str, stocks: List[str
         logger.info(f"[{task_id}] Starting prediction task for {len(stocks)} stocks")
 
         # 更新任务状态为"运行中"
-        await MongoDB.update_prediction(task_id, {"status": "running"})
+        await MongoDB.update_prediction_task(task_id, {"status": "running"})
 
         # 使用 Qlib 预测服务
         # 获取股票名称映射
@@ -70,10 +75,13 @@ async def execute_predict_task(task_id: str, predict_date: str, stocks: List[str
 
         # 保存预测结果到数据库
         logger.info(f"[{task_id}] Saving {len(predictions)} predictions to database")
+        # 为每个预测结果添加 task_id
+        for pred in predictions:
+            pred["task_id"] = task_id
         await MongoDB.insert_predictions(predictions)
 
         # 更新任务状态为"完成"
-        await MongoDB.update_prediction(task_id, {
+        await MongoDB.update_prediction_task(task_id, {
             "status": "completed",
             "progress": 100,
             "predicted_count": len(stocks),
@@ -92,7 +100,7 @@ async def execute_predict_task(task_id: str, predict_date: str, stocks: List[str
     except Exception as e:
         logger.error(f"[{task_id}] Prediction task failed: {e}")
         # 更新任务状态为"失败"
-        await MongoDB.update_prediction(task_id, {
+        await MongoDB.update_prediction_task(task_id, {
             "status": "failed",
             "error": str(e),
             "updated_at": datetime.utcnow()
@@ -141,11 +149,12 @@ async def predict(
         task_id = f"predict_{predict_date.replace('-', '')}_{datetime.now().timestamp()}"
 
         # 保存任务到数据库
-        await MongoDB.insert_prediction({
+        await MongoDB.insert_prediction_task({
             "task_id": task_id,
             "status": "pending",
             "predict_date": predict_date,
             "stocks": stocks,
+            "is_locked": False,
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
         })
@@ -252,3 +261,202 @@ async def get_all_prediction_tasks():
     except Exception as e:
         logger.error(f"Failed to get prediction tasks: {e}")
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
+@router.get("/validate")
+async def validate_data_date(date: str = Query(..., description="数据日期（格式：YYYY-MM-DD）")):
+    """
+    验证数据日期
+
+    检查是否有足够的股票数据（超过5个代码无数据则返回错误）
+
+    Args:
+        date: 数据日期
+
+    Returns:
+        验证结果
+    """
+    try:
+        # 验证日期格式
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="日期格式无效，请使用 YYYY-MM-DD 格式")
+
+        # 获取所有启用的股票
+        stocks_data = await MongoDB.get_stocks(enabled_only=True)
+        all_stocks = [s["code"] for s in stocks_data]
+
+        if not all_stocks:
+            raise HTTPException(status_code=400, detail="没有启用的股票代码")
+
+        # 检查是否有预测数据
+        query = {"date": date, "code": {"$in": all_stocks}}
+        existing_predictions = await MongoDB.get_predictions(query=query)
+
+        existing_codes = set(p["code"] for p in existing_predictions)
+        missing_codes = [code for code in all_stocks if code not in existing_codes]
+
+        if len(missing_codes) > 5:
+            return {
+                "valid": False,
+                "error": f"数据不完整：{len(missing_codes)} 个股票代码缺少数据（允许最多5个）",
+                "missing_count": len(missing_codes),
+                "missing_codes": missing_codes[:10]  # 只返回前10个
+            }
+
+        return {
+            "valid": True,
+            "message": "数据验证通过"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to validate data date: {e}")
+        raise HTTPException(status_code=500, detail=f"验证失败: {str(e)}")
+
+
+@router.get("/tasks")
+async def get_prediction_tasks_list(limit: int = Query(50, description="返回数量限制")):
+    """
+    获取预测任务列表
+
+    Args:
+        limit: 返回数量限制
+
+    Returns:
+        预测任务列表
+    """
+    try:
+        tasks = await MongoDB.get_prediction_tasks(limit=limit)
+
+        # 格式化任务列表
+        formatted_tasks = []
+        for task in tasks:
+            formatted_tasks.append({
+                "id": task.get("task_id"),
+                "start_time": task.get("created_at"),
+                "data_date": task.get("predict_date"),
+                "status": task.get("status", "unknown"),
+                "is_locked": task.get("is_locked", False)
+            })
+
+        return formatted_tasks
+    except Exception as e:
+        logger.error(f"Failed to get prediction tasks: {e}")
+        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
+@router.get("/tasks/{task_id}/results")
+async def get_task_results(task_id: str):
+    """
+    获取特定任务的预测结果
+
+    Args:
+        task_id: 任务ID
+
+    Returns:
+        预测结果列表
+    """
+    try:
+        # 检查任务是否存在
+        task = await MongoDB.get_prediction_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+
+        # 获取持仓列表
+        positions = await MongoDB.get_positions()
+        position_codes = set(p["code"] for p in positions)
+
+        # 获取预测结果
+        predictions = await MongoDB.get_prediction_results(task_id)
+
+        # 格式化结果
+        formatted_results = []
+        for idx, pred in enumerate(predictions, 1):
+            formatted_results.append({
+                "row_number": idx,
+                "stock_code": pred.get("code"),
+                "stock_name": pred.get("name"),
+                "prediction_score": pred.get("score"),
+                "is_held": pred.get("code") in position_codes
+            })
+
+        return formatted_results
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get task results: {e}")
+        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
+@router.delete("/tasks/{task_id}")
+async def delete_prediction_task_endpoint(task_id: str):
+    """
+    删除预测任务
+
+    Args:
+        task_id: 任务ID
+
+    Returns:
+        删除结果
+    """
+    try:
+        # 检查任务是否存在
+        task = await MongoDB.get_prediction_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+
+        # 检查是否锁定
+        if task.get("is_locked", False):
+            raise HTTPException(status_code=403, detail="任务已锁定，无法删除")
+
+        # 删除任务
+        deleted_count = await MongoDB.delete_prediction_task(task_id)
+
+        if deleted_count == 0:
+            raise HTTPException(status_code=500, detail="删除失败")
+
+        return {"message": "删除成功", "task_id": task_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete prediction task: {e}")
+        raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
+
+
+@router.put("/tasks/{task_id}/lock")
+async def update_task_lock_status(task_id: str, request_data: LockRequest):
+    """
+    更新任务锁定状态
+
+    Args:
+        task_id: 任务ID
+        request_data: 锁定状态请求
+
+    Returns:
+        更新结果
+    """
+    try:
+        # 检查任务是否存在
+        task = await MongoDB.get_prediction_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+
+        # 更新锁定状态
+        await MongoDB.update_prediction_task(task_id, {
+            "is_locked": request_data.is_locked,
+            "updated_at": datetime.utcnow()
+        })
+
+        return {
+            "message": "更新成功",
+            "task_id": task_id,
+            "is_locked": request_data.is_locked
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update task lock status: {e}")
+        raise HTTPException(status_code=500, detail=f"更新失败: {str(e)}")
