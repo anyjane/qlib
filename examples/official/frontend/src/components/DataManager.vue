@@ -310,6 +310,7 @@ export default {
       handleSelectAll,
       handleClearSelection,
       handleDownloadStock,
+      handleUpdateStock,
       handleBatchDownload,
       handleBatchUpdate,
       handleBatchDelete,
