@@ -10,57 +10,7 @@ from typing import Dict, Set, Optional
 from config import settings
 from database import MongoDB
 from services.task_pool import initialize_task_pool, get_task_pool_manager
-
-# ============================================================================
-# WebSocket Connection Manager
-# ============================================================================
-
-class ConnectionManager:
-    """WebSocket 连接管理器 - 用于实时推送任务状态"""
-    
-    def __init__(self):
-        self.active_connections: Dict[str, Set[WebSocket]] = {}
-    
-    async def connect(self, websocket: WebSocket, client_id: str):
-        """客户端连接"""
-        await websocket.accept()
-        if client_id not in self.active_connections:
-            self.active_connections[client_id] = set()
-        self.active_connections[client_id].add(websocket)
-        logger.info(f"WebSocket client connected: {client_id}")
-    
-    async def disconnect(self, websocket: WebSocket, client_id: str):
-        """客户端断开连接"""
-        if client_id in self.active_connections:
-            self.active_connections[client_id].discard(websocket)
-            logger.info(f"WebSocket client disconnected: {client_id}")
-    
-    async def broadcast_task_update(self, update_data: dict):
-        """广播任务更新到所有连接的客户端
-        
-        Args:
-            update_data: 包含 task_id 和其他更新信息的字典
-        """
-        disconnected = set()
-        task_id = update_data.get("task_id", "unknown")
-        
-        for client_id, connections in self.active_connections.items():
-            for connection in connections:
-                try:
-                    await connection.send_json({
-                        "type": "task_update",
-                        "data": update_data
-                    })
-                except Exception as e:
-                    logger.warning(f"Failed to send to client {client_id}: {e}")
-                    disconnected.add(connection)
-            # 清理断开的连接
-            if disconnected:
-                self.active_connections[client_id] -= disconnected
-        logger.debug(f"Broadcasted task update for {task_id}")
-
-# 创建全局 WebSocket 管理器
-manager = ConnectionManager()
+from websocket_manager import manager
 
 
 # Configure loguru

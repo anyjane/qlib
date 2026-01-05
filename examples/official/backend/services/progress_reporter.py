@@ -135,8 +135,8 @@ class ProgressMonitor:
         Args:
             progress_update: 进度更新字典
         """
-        from ..database import MongoDB
-        from ..websocket_manager import WebSocketManager
+        from database import MongoDB
+        from websocket_manager import WebSocketManager
         
         task_id = progress_update.get("task_id")
         

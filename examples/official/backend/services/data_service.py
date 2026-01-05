@@ -2,6 +2,7 @@
 from typing import List
 from datetime import datetime
 from pathlib import Path
+import os
 import sys
 import shutil
 import requests
@@ -10,8 +11,22 @@ import numpy as np
 from loguru import logger
 import subprocess
 
-from config import settings
 from database import MongoDB
+
+# 尝试导入 config，如果成功则使用 settings（主进程中）
+# 如果失败或在工作进程中，使用环境变量
+try:
+    from config import settings as _settings
+    # 在主进程中使用 config.settings
+    QLIB_PROVIDER_URI = _settings.QLIB_PROVIDER_URI
+    _using_config_settings = True
+except:
+    pass
+    # 在工作进程中，使用环境变量避免序列化问题
+    # _BACKEND_DIR = Path(__file__).parent
+    # _DEFAULT_QLIB_PROVIDER_URI = str(_BACKEND_DIR / "qlib_data")
+    # QLIB_PROVIDER_URI = os.environ.get('QLIB_PROVIDER_URI', _DEFAULT_QLIB_PROVIDER_URI)
+    # _using_config_settings = False
 
 
 __all__ = ['TencentDataService', 'standardize_stock_codes']
@@ -267,7 +282,7 @@ class TencentDataService:
             dict: {股票代码: 保存结果}
         """
         results = {}
-        qlib_dir = Path(settings.QLIB_PROVIDER_URI).expanduser()
+        qlib_dir = Path(QLIB_PROVIDER_URI).expanduser()
 
         # 创建临时目录
         temp_dir = qlib_dir / "temp_download"
@@ -473,7 +488,7 @@ class TencentDataService:
         直接检查 Qlib 二进制数据文件是否存在
         """
         try:
-            data_path = Path(settings.QLIB_PROVIDER_URI).expanduser()
+            data_path = Path(QLIB_PROVIDER_URI).expanduser()
             instrument_path = data_path / "features" / code
 
             if not instrument_path.exists():
@@ -531,7 +546,7 @@ class TencentDataService:
         import shutil
         from pathlib import Path
 
-        data_path = Path(settings.QLIB_PROVIDER_URI).expanduser()
+        data_path = Path(QLIB_PROVIDER_URI).expanduser()
 
         # 删除 features 目录下的股票数据（Qlib 的实际数据存储位置）
         instrument_path = data_path / "features" / code

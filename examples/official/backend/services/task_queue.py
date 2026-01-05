@@ -247,27 +247,25 @@ class TaskDispatcher:
         task_id = result.get("task_id")
         self.logger.info(f"Task {task_id} completed with status: {result.get('status')}")
 
-        # 直接更新到数据库和 WebSocket（在主线程中）
+        # 直接更新到数据库和 WebSocket（在回调线程中）
         try:
-            from ..database import MongoDB
-            from ..models import TaskStatus
+            from database import MongoDB
+            from models import TaskStatus
 
             task_type = result.get("task_type")
 
-            # 根据任务类型更新不同的集合
-            if task_type == "data_download" or task_type == "data_update":
-                # 同步调用（使用 asyncio.run 确保在事件循环中）
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.create_task(self._update_to_db_and_ws(result))
-                else:
+            # 创建新的事件循环来运行异步操作
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                # 根据任务类型更新不同的集合
+                if task_type == "data_download" or task_type == "data_update":
                     loop.run_until_complete(self._update_to_db_and_ws(result))
-            elif task_type == "prediction":
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.create_task(self._update_to_db_and_ws(result))
-                else:
+                elif task_type == "prediction":
                     loop.run_until_complete(self._update_to_db_and_ws(result))
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
 
         except Exception as e:
             if self.running:
@@ -295,15 +293,17 @@ class TaskDispatcher:
         }
 
         try:
-            from ..database import MongoDB
-            from ..websocket_manager import WebSocketManager
+            from database import MongoDB
+            from websocket_manager import WebSocketManager
 
-            # 更新数据库
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(self._update_error_to_db_and_ws(result))
-            else:
+            # 创建新的事件循环来运行异步操作
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
                 loop.run_until_complete(self._update_error_to_db_and_ws(result))
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
         except Exception as e:
             if self.running:
                 self.logger.error(f"Failed to handle task error: {e}")
@@ -315,8 +315,8 @@ class TaskDispatcher:
         Args:
             result: 任务结果
         """
-        from ..database import MongoDB
-        from ..websocket_manager import WebSocketManager
+        from database import MongoDB
+        from websocket_manager import WebSocketManager
         
         task_id = result.get("task_id")
         task_type = result.get("task_type")
@@ -363,8 +363,8 @@ class TaskDispatcher:
         Args:
             result: 错误结果
         """
-        from ..database import MongoDB
-        from ..websocket_manager import WebSocketManager
+        from database import MongoDB
+        from websocket_manager import WebSocketManager
         
         task_id = result.get("task_id")
         

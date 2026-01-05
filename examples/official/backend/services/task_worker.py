@@ -25,15 +25,12 @@ logger = logging.getLogger(__name__)
 # 全局变量，用于存储 Qlib 是否已初始化
 _qlib_initialized = False
 
-# 导入配置
-try:
-    from config import settings
-except ImportError:
-    logger.warning("Failed to import config, using default Qlib settings")
-    class Settings:
-        QLIB_PROVIDER_URI = os.path.expanduser("~/.qlib/qlib_data/cn_data")
-        QLIB_REGION = "cn"
-    settings = Settings()
+# 导入配置 - 避免序列化问题，直接使用环境变量或默认值
+# 不导入 config 模块，避免可能包含的不可序列化对象
+# 默认路径应该与 config.py 保持一致
+# _QLIB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "qlib_data")
+# QLIB_PROVIDER_URI = os.environ.get('QLIB_PROVIDER_URI') or _QLIB_DIR
+# QLIB_REGION = os.environ.get('QLIB_REGION') or "cn"
 
 
 def init_worker_process():
@@ -52,8 +49,8 @@ def init_worker_process():
 
     try:
         # 使用配置中的 provider_uri 和 region
-        provider_uri = settings.QLIB_PROVIDER_URI
-        region = settings.QLIB_REGION.upper()
+        provider_uri = QLIB_PROVIDER_URI
+        region = QLIB_REGION.upper()
 
         # 如果 region 是 'cn'，则使用 REG_CN，否则直接使用字符串
         region_config = REG_CN if region == "CN" else region
@@ -80,31 +77,50 @@ def execute_data_download_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
     logger.info(f"Executing data download task {task_id}")
     
     try:
-        from .data_service import download_data_from_yahoo
-        from .progress_reporter import ProgressReporter
-        
+        import asyncio
+        from services.data_service import TencentDataService
+        from services.progress_reporter import ProgressReporter
+
         reporter = ProgressReporter(task_id)
         reporter.update_progress(10, "Starting data download...")
-        
-        # 执行数据下载
-        result = download_data_from_yahoo(
-            start_date=start_date,
+
+        # 执行数据下载（使用 TencentDataService）
+        result = asyncio.run(TencentDataService.download_from_tencent(
+            stocks=TencentDataService.standardize_stock_codes(stocks),
+            start=start_date,
+            end=end_date
+        ))
+
+        reporter.update_progress(90, "Saving data to Qlib format...")
+
+        # 保存数据到 Qlib 格式（使用 dump_fix 模式）
+        save_result = TencentDataService.save_data_to_qlib_format(
+            data_dict=result,
+            download_ranges=start_date,
             end_date=end_date,
-            stocks=stocks,
-            progress_callback=lambda p, msg: reporter.update_progress(10 + p * 0.8, msg)
+            use_update_mode=False
         )
         
         reporter.update_progress(100, "Data download completed")
         logger.info(f"Data download task {task_id} completed successfully")
-        
+
+        # 解析结果，提取成功和失败的股票
+        downloaded_stocks = []
+        failed_stocks = []
+        for code, data in result.items():
+            if data.get("count", 0) > 0:
+                downloaded_stocks.append(code)
+            else:
+                failed_stocks.append(code)
+
         return {
             "task_id": task_id,
             "task_type": task_type,
             "status": "completed",
             "progress": 100.0,
             "message": "Data download completed successfully",
-            "downloaded_stocks": result.get("downloaded_stocks", []),
-            "failed_stocks": result.get("failed_stocks", []),
+            "downloaded_stocks": downloaded_stocks,
+            "failed_stocks": failed_stocks,
             "completed_at": datetime.now().isoformat()
         }
     except Exception as e:
@@ -130,29 +146,55 @@ def execute_data_update_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
     logger.info(f"Executing data update task {task_id}")
     
     try:
-        from .data_service import update_data_from_yahoo
-        from .progress_reporter import ProgressReporter
-        
+        import asyncio
+        from services.data_service import TencentDataService
+        from services.progress_reporter import ProgressReporter
+
         reporter = ProgressReporter(task_id)
         reporter.update_progress(10, "Starting data update...")
-        
-        # 执行数据更新
-        result = update_data_from_yahoo(
-            stocks=stocks,
-            progress_callback=lambda p, msg: reporter.update_progress(10 + p * 0.8, msg)
+
+        # 执行数据更新（使用 TencentDataService）
+        # 更新任务默认获取最近 90 天的数据
+        from datetime import datetime, timedelta
+        end_date = datetime.now().strftime("%Y-%m-%d")
+        start_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+
+        result = asyncio.run(TencentDataService.download_from_tencent(
+            stocks=TencentDataService.standardize_stock_codes(stocks),
+            start=start_date,
+            end=end_date
+        ))
+
+        reporter.update_progress(90, "Saving data to Qlib format...")
+
+        # 保存数据到 Qlib 格式（使用更新模式）
+        save_result = TencentDataService.save_data_to_qlib_format(
+            data_dict=result,
+            download_ranges=start_date,
+            end_date=end_date,
+            use_update_mode=True
         )
         
         reporter.update_progress(100, "Data update completed")
         logger.info(f"Data update task {task_id} completed successfully")
-        
+
+        # 解析结果，提取成功和失败的股票
+        updated_stocks = []
+        failed_stocks = []
+        for code, data in result.items():
+            if data.get("count", 0) > 0:
+                updated_stocks.append(code)
+            else:
+                failed_stocks.append(code)
+
         return {
             "task_id": task_id,
             "task_type": task_type,
             "status": "completed",
             "progress": 100.0,
             "message": "Data update completed successfully",
-            "updated_stocks": result.get("updated_stocks", []),
-            "failed_stocks": result.get("failed_stocks", []),
+            "updated_stocks": updated_stocks,
+            "failed_stocks": failed_stocks,
             "completed_at": datetime.now().isoformat()
         }
     except Exception as e:
@@ -179,15 +221,15 @@ def execute_prediction_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
     logger.info(f"Executing prediction task {task_id}")
     
     try:
-        from .qlib_predictor import QlibPredictor
-        from .progress_reporter import ProgressReporter
+        from services.qlib_predictor import QlibPredictor
+        from services.progress_reporter import ProgressReporter
         
         reporter = ProgressReporter(task_id)
         reporter.update_progress(10, "Initializing predictor...")
-        
+
         # 使用配置中的 provider_uri 创建预测器
         predictor = QlibPredictor(
-            provider_uri=settings.QLIB_PROVIDER_URI,
+            provider_uri=QLIB_PROVIDER_URI,
             experiment_name=f"prediction_{task_id}"
         )
         reporter.update_progress(20, "Generating predictions...")
