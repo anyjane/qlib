@@ -516,10 +516,19 @@ class TencentDataService:
                     "end_date": end_date.strftime("%Y-%m-%d"),
                     "count": len(df)
                 }
-        except Exception as e:
-            logger.error(f"Failed to get data info for {code}: {e}")
+            else:
+                logger.debug(f"No data found for stock {code}")
+                return {"has_data": False}
 
-        return {"has_data": False}
+        except Exception as e:
+            # 特定错误：数据不存在或频率错误
+            error_msg = str(e)
+            if "can't find a freq" in error_msg or "empty" in error_msg.lower():
+                logger.debug(f"Stock {code} has no data: {e}")
+                return {"has_data": False}
+            else:
+                logger.error(f"Failed to get data info for {code}: {e}")
+                return {"has_data": False}
     
     @staticmethod
     async def delete_stock_data(code: str):

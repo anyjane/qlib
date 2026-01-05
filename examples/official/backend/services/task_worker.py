@@ -67,6 +67,7 @@ def execute_data_download_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
     """
     执行数据下载任务
     """
+    task_type = task_params.get("task_type")
     task_id = task_params.get("task_id")
     start_date = task_params.get("start_date", "2015-01-01")
     end_date = task_params.get("end_date")
@@ -94,6 +95,7 @@ def execute_data_download_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
         
         return {
             "task_id": task_id,
+            "task_type": task_type,
             "status": "completed",
             "progress": 100.0,
             "message": "Data download completed successfully",
@@ -105,6 +107,7 @@ def execute_data_download_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(f"Data download task {task_id} failed: {e}")
         return {
             "task_id": task_id,
+            "task_type": task_type,
             "status": "failed",
             "progress": 0.0,
             "error": str(e),
@@ -116,6 +119,7 @@ def execute_data_update_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
     """
     执行数据更新任务
     """
+    task_type = task_params.get("task_type")
     task_id = task_params.get("task_id")
     stocks = task_params.get("stocks", [])
     
@@ -139,6 +143,7 @@ def execute_data_update_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
         
         return {
             "task_id": task_id,
+            "task_type": task_type,
             "status": "completed",
             "progress": 100.0,
             "message": "Data update completed successfully",
@@ -150,6 +155,7 @@ def execute_data_update_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(f"Data update task {task_id} failed: {e}")
         return {
             "task_id": task_id,
+            "task_type": task_type,
             "status": "failed",
             "progress": 0.0,
             "error": str(e),
@@ -161,6 +167,7 @@ def execute_prediction_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
     """
     执行预测任务
     """
+    task_type = task_params.get("task_type")
     task_id = task_params.get("task_id")
     predict_date = task_params.get("predict_date")
     stocks = task_params.get("stocks")
@@ -192,6 +199,7 @@ def execute_prediction_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
         
         return {
             "task_id": task_id,
+            "task_type": task_type,
             "status": "completed",
             "progress": 100.0,
             "message": "Prediction completed successfully",
@@ -203,6 +211,7 @@ def execute_prediction_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(f"Prediction task {task_id} failed: {e}")
         return {
             "task_id": task_id,
+            "task_type": task_type,
             "status": "failed",
             "progress": 0.0,
             "error": str(e),

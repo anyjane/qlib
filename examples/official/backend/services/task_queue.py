@@ -1,9 +1,9 @@
 """Task queue and dispatcher for process pool"""
 import logging
-from typing import Dict, Any, Optional
-from multiprocessing import Queue, JoinableQueue
 import threading
+from typing import Dict, Any, Optional
 from queue import Empty
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +18,10 @@ class TaskQueue:
         Args:
             maxsize: 队列最大长度
         """
-        self.task_queue = JoinableQueue(maxsize=maxsize)
-        self.result_queue = Queue(maxsize=maxsize)
+        from multiprocessing import Manager
+        self.manager = Manager()
+        self.task_queue = self.manager.Queue(maxsize=maxsize)
+        self.result_queue = self.manager.Queue(maxsize=maxsize)
         self.logger = logging.getLogger(__name__)
     
     def put_task(self, task_params: Dict[str, Any]) -> bool:
@@ -100,16 +102,19 @@ class TaskQueue:
     
     def task_done(self):
         """标记任务已完成"""
-        self.task_queue.task_done()
+        # Manager Queue 不支持 task_done()
+        pass
     
     def join(self):
         """等待队列中的所有任务完成"""
-        self.task_queue.join()
+        # Manager Queue 不支持 join()
+        pass
     
     def close(self):
         """关闭队列"""
         self.task_queue.close()
         self.result_queue.close()
+        self.manager.shutdown()
     
     def size(self) -> int:
         """获取队列大小"""
@@ -132,6 +137,7 @@ class TaskDispatcher:
         self.running = False
         self.dispatcher_thread = None
         self.logger = logging.getLogger(__name__)
+        self.result_queue = None  # 用于存储结果队列的引用
     
     def start(self):
         """启动任务分发器"""
@@ -140,6 +146,7 @@ class TaskDispatcher:
             return
         
         self.running = True
+        self.result_queue = self.task_queue.result_queue
         self.dispatcher_thread = threading.Thread(target=self._dispatch_loop, daemon=True)
         self.dispatcher_thread.start()
         self.logger.info("Task dispatcher started")
@@ -174,9 +181,6 @@ class TaskDispatcher:
                     error_callback=self._task_error_callback
                 )
                 
-                # 标记任务已从队列中取出
-                self.task_queue.task_done()
-                
             except Exception as e:
                 self.logger.error(f"Error in dispatch loop: {e}")
     
@@ -205,8 +209,30 @@ class TaskDispatcher:
         task_id = result.get("task_id")
         self.logger.info(f"Task {task_id} completed with status: {result.get('status')}")
         
-        # 将结果放入结果队列
-        self.task_queue.put_result(result)
+        # 直接更新到数据库和 WebSocket（在主线程中）
+        try:
+            from ..database import MongoDB
+            from ..models import TaskStatus
+            
+            task_type = result.get("task_type")
+            
+            # 根据任务类型更新不同的集合
+            if task_type == "data_download" or task_type == "data_update":
+                # 同步调用（使用 asyncio.run 确保在事件循环中）
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(self._update_to_db_and_ws(result))
+                else:
+                    loop.run_until_complete(self._update_to_db_and_ws(result))
+            elif task_type == "prediction":
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(self._update_to_db_and_ws(result))
+                else:
+                    loop.run_until_complete(self._update_to_db_and_ws(result))
+            
+        except Exception as e:
+            self.logger.error(f"Failed to handle task result: {e}")
     
     def _task_error_callback(self, error):
         """
@@ -224,74 +250,29 @@ class TaskDispatcher:
             "error": str(error),
             "completed_at": None
         }
-        self.task_queue.put_result(result)
-
-
-class ResultCollector:
-    """结果收集器，负责从结果队列中收集结果并更新到数据库"""
-    
-    def __init__(self, task_queue: TaskQueue):
-        """
-        初始化结果收集器
         
-        Args:
-            task_queue: 任务队列实例
+        try:
+            from ..database import MongoDB
+            from ..websocket_manager import WebSocketManager
+            
+            # 更新数据库
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(self._update_error_to_db_and_ws(result))
+            else:
+                loop.run_until_complete(self._update_error_to_db_and_ws(result))
+        except Exception as e:
+            self.logger.error(f"Failed to handle task error: {e}")
+    
+    async def _update_to_db_and_ws(self, result: Dict[str, Any]):
         """
-        self.task_queue = task_queue
-        self.running = False
-        self.collector_thread = None
-        self.logger = logging.getLogger(__name__)
-    
-    def start(self):
-        """启动结果收集器"""
-        if self.running:
-            self.logger.warning("Result collector already running")
-            return
-        
-        self.running = True
-        self.collector_thread = threading.Thread(target=self._collect_loop, daemon=True)
-        self.collector_thread.start()
-        self.logger.info("Result collector started")
-    
-    def stop(self):
-        """停止结果收集器"""
-        if not self.running:
-            return
-        
-        self.running = False
-        if self.collector_thread:
-            self.collector_thread.join(timeout=5)
-        self.logger.info("Result collector stopped")
-    
-    def _collect_loop(self):
-        """结果收集循环"""
-        while self.running:
-            try:
-                # 从结果队列中获取结果
-                result = self.task_queue.get_result(timeout=1)
-                if result is None:
-                    continue
-                
-                # 异步处理结果
-                task_id = result.get("task_id")
-                self.logger.info(f"Collecting result for task {task_id}")
-                
-                # 将结果更新到数据库
-                import asyncio
-                asyncio.create_task(self._update_task_result(result))
-                
-            except Exception as e:
-                self.logger.error(f"Error in collect loop: {e}")
-    
-    async def _update_task_result(self, result: Dict[str, Any]):
-        """
-        更新任务结果到数据库
+        更新结果到数据库和 WebSocket
         
         Args:
             result: 任务结果
         """
         from ..database import MongoDB
-        from ..models import TaskStatus
+        from ..websocket_manager import WebSocketManager
         
         task_id = result.get("task_id")
         task_type = result.get("task_type")
@@ -316,7 +297,6 @@ class ResultCollector:
                 })
             
             # 通过 WebSocket 推送任务状态更新
-            from ..websocket_manager import WebSocketManager
             ws_manager = WebSocketManager()
             await ws_manager.broadcast_task_update({
                 "task_id": task_id,
@@ -327,7 +307,33 @@ class ResultCollector:
                 "error": result.get("error")
             })
             
-            self.logger.info(f"Task {task_id} result updated to database")
+            self.logger.debug(f"Task {task_id} result updated")
             
         except Exception as e:
-            self.logger.error(f"Failed to update task result for {task_id}: {e}")
+            self.logger.error(f"Failed to update task {task_id}: {e}")
+    
+    async def _update_error_to_db_and_ws(self, result: Dict[str, Any]):
+        """
+        更新错误到数据库和 WebSocket
+        
+        Args:
+            result: 错误结果
+        """
+        from ..database import MongoDB
+        from ..websocket_manager import WebSocketManager
+        
+        task_id = result.get("task_id")
+        
+        try:
+            # 通过 WebSocket 推送错误
+            ws_manager = WebSocketManager()
+            await ws_manager.broadcast_task_update({
+                "task_id": task_id,
+                "status": "failed",
+                "error": result.get("error")
+            })
+            
+            self.logger.debug(f"Task {task_id} error updated")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to update task error {task_id}: {e}")
