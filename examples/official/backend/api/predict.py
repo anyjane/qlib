@@ -1,30 +1,128 @@
 """Prediction API"""
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Body
-from typing import List, Optional
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
+from pydantic import BaseModel
+from typing import List, Optional, Dict
 from datetime import datetime
 from loguru import logger
 
 from database import MongoDB
+from main import manager
+from services.qlib_predictor import QlibPredictor
 
 router = APIRouter(prefix="/api/predict", tags=["Predict"])
+
+
+class PredictRequest(BaseModel):
+    """预测请求体"""
+    stocks: Optional[List[str]] = None
+
+
+async def execute_predict_task(task_id: str, predict_date: str, stocks: List[str]):
+    """
+    后台执行预测任务
+
+    Args:
+        task_id: 任务ID
+        predict_date: 预测日期
+        stocks: 股票代码列表
+    """
+    try:
+        logger.info(f"[{task_id}] Starting prediction task for {len(stocks)} stocks")
+
+        # 更新任务状态为"运行中"
+        await MongoDB.update_prediction(task_id, {"status": "running"})
+
+        # 使用 Qlib 预测服务
+        # 获取股票名称映射
+        stocks_data = await MongoDB.get_stocks(enabled_only=True)
+        stock_names_map: Dict[str, str] = {s["code"]: s["name"] for s in stocks_data}
+
+        # 创建 Qlib 预测器
+        predictor = QlibPredictor(
+            provider_uri="~/.qlib/tencent_data/qlib_data",
+            experiment_name=f"prediction_{task_id}"
+        )
+
+        # 执行预测
+        logger.info(f"[{task_id}] Calling Qlib prediction service for {len(stocks)} stocks")
+        result = predictor.predict(
+            predict_date=predict_date,
+            stock_codes=stocks,
+            stock_names_map=stock_names_map
+        )
+
+        # 转换预测结果
+        predictions = []
+        for pred in result['predictions']:
+            predictions.append({
+                "date": predict_date,
+                "code": pred['code'],
+                "name": pred['name'],
+                "score": pred['score'],
+                "execution_timestamp": result['execution_timestamp'],
+                "data_date": result['data_date'],
+                "created_at": datetime.utcnow()
+            })
+
+        logger.info(f"[{task_id}] Qlib prediction completed: {len(predictions)} predictions")
+        if result.get('outliers'):
+            logger.warning(f"[{task_id}] Found outliers: {result['outliers']}")
+
+        # 保存预测结果到数据库
+        logger.info(f"[{task_id}] Saving {len(predictions)} predictions to database")
+        await MongoDB.insert_predictions(predictions)
+
+        # 更新任务状态为"完成"
+        await MongoDB.update_prediction(task_id, {
+            "status": "completed",
+            "progress": 100,
+            "predicted_count": len(stocks),
+            "updated_at": datetime.utcnow()
+        })
+
+        # 推送完成状态
+        await manager.broadcast_task_update(task_id, {
+            "progress": 100,
+            "status": "completed",
+            "predicted_count": len(stocks)
+        })
+
+        logger.info(f"[{task_id}] Prediction task completed successfully")
+
+    except Exception as e:
+        logger.error(f"[{task_id}] Prediction task failed: {e}")
+        # 更新任务状态为"失败"
+        await MongoDB.update_prediction(task_id, {
+            "status": "failed",
+            "error": str(e),
+            "updated_at": datetime.utcnow()
+        })
+
+        # 推送失败状态
+        await manager.broadcast_task_update(task_id, {
+            "status": "failed",
+            "error": str(e)
+        })
 
 
 @router.post("/")
 async def predict(
     background_tasks: BackgroundTasks,
-    predict_date: str = None,
-    stocks: Optional[List[str]] = Body(default=None)
+    predict_date: Optional[str] = Query(None, description="预测日期（默认: 今天）"),
+    request_data: PredictRequest = None
 ):
     """
     执行预测（默认最新数据）
 
     Args:
         predict_date: 预测日期（默认: 今天）
-        stocks: 指定股票代码列表（默认: 所有启用的股票）
+        request_data: 请求数据，包含股票代码列表（默认: 所有启用的股票）
 
     Returns:
         任务信息
     """
+    # 从请求体中提取股票列表
+    stocks = request_data.stocks if request_data else None
     try:
         if predict_date is None:
             predict_date = datetime.now().strftime("%Y-%m-%d")
@@ -52,8 +150,10 @@ async def predict(
             "updated_at": datetime.utcnow(),
         })
 
-        # 后台执行预测
-        logger.info(f"Prediction task created: {task_id}")
+        # 添加后台任务执行预测
+        background_tasks.add_task(execute_predict_task, task_id, predict_date, stocks)
+
+        logger.info(f"Prediction task created: {task_id}, background task scheduled")
 
         return {
             "task_id": task_id,

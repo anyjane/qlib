@@ -201,6 +201,20 @@ class MongoDB:
         """Insert a prediction"""
         await cls.database.predictions.insert_one(prediction_dict)
 
+    @classmethod
+    async def insert_predictions(cls, predictions_list: List[Dict]):
+        """Insert multiple predictions"""
+        if predictions_list:
+            await cls.database.predictions.insert_many(predictions_list)
+
+    @classmethod
+    async def update_prediction(cls, task_id: str, update_dict: Dict):
+        """Update prediction task by task_id"""
+        await cls.database.predictions.update_one(
+            {"task_id": task_id},
+            {"$set": update_dict}
+        )
+
     # ============================================================================
     # Agent Config Collection Operations
     # ============================================================================

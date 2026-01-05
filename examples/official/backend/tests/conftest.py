@@ -219,6 +219,8 @@ def create_test_prediction(date: str = "2025-01-04", code: str = "sh600000", sco
         "score": score,
         "rank": 1,
         "is_held": False,
+        "execution_timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "data_date": date,
         "created_at": datetime.utcnow()
     }
 

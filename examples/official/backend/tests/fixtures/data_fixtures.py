@@ -249,6 +249,8 @@ def generate_test_predictions(date: str = None, count: int = 5) -> List[Dict]:
     if date is None:
         date = datetime.utcnow().strftime("%Y-%m-%d")
 
+    execution_timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
     stocks = [
         ("sh600000", "浦发银行"),
         ("sh600036", "招商银行"),
@@ -266,6 +268,8 @@ def generate_test_predictions(date: str = None, count: int = 5) -> List[Dict]:
             "score": 0.95 - (i * 0.1),
             "rank": i + 1,
             "is_held": False,
+            "execution_timestamp": execution_timestamp,
+            "data_date": date,
             "created_at": datetime.utcnow()
         })
 
