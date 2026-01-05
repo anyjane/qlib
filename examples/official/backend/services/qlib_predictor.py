@@ -19,7 +19,7 @@ import numpy as np
 # 添加当前目录到 path
 CUR_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = CUR_DIR.parent
-PROJECT_DIR = BACKEND_DIR.parent.parent
+PROJECT_DIR = BACKEND_DIR.parent.parent.parent  # 指向 /Users/samlty/code/qlib
 
 # 添加项目路径
 sys.path.insert(0, str(CUR_DIR))
@@ -34,12 +34,22 @@ from qlib.utils import init_instance_by_config
 from qlib.data import D
 
 # 导入模型配置
-try:
-    sys.path.insert(0, str(PROJECT_DIR / "examples" / "TencentDataSource"))
-    from config import MODEL_CONFIG
-except ImportError:
-    logger.warning("Cannot import MODEL_CONFIG from TencentDataSource/config.py")
-    MODEL_CONFIG = None
+# 直接定义 MODEL_CONFIG，避免导入路径问题
+MODEL_CONFIG = {
+    "class": "LGBModel",
+    "module_path": "qlib.contrib.model.gbdt",
+    "kwargs": {
+        "loss": "mse",
+        "colsample_bytree": 0.8879,
+        "learning_rate": 0.2,
+        "subsample": 0.8789,
+        "lambda_l1": 205.6999,
+        "lambda_l2": 580.9768,
+        "max_depth": 8,
+        "num_leaves": 210,
+        "num_threads": 20,
+    },
+}
 
 
 class QlibPredictor:
@@ -182,8 +192,6 @@ class QlibPredictor:
                     "kwargs": {
                         "start_time": predict_date,
                         "end_time": predict_date,
-                        "fit_start_time": predict_date,
-                        "fit_end_time": predict_date,
                         "instruments": stock_list,
                     },
                 },

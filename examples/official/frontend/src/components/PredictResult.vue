@@ -10,6 +10,34 @@
 
       <el-divider></el-divider>
 
+      <!-- 日期信息展示 -->
+      <div class="prediction-info" v-if="predictDate || dataDate">
+        <el-tag v-if="predictDate" type="info" effect="plain">
+          <i class="el-icon-date"></i>
+          预测日期: {{ predictDate }}
+        </el-tag>
+        <el-tag v-if="dataDate" type="success" effect="plain">
+          <i class="el-icon-date"></i>
+          数据日期: {{ dataDate }}
+        </el-tag>
+      </div>
+
+      <!-- 日期选择对话框 -->
+      <el-dialog v-model="showDateDialog" title="选择预测日期" width="400px">
+        <el-date-picker
+          v-model="selectedDate"
+          type="date"
+          placeholder="选择日期"
+          value-format="YYYY-MM-DD"
+          :default-value="new Date()"
+          style="width: 100%"
+        ></el-date-picker>
+        <template #footer>
+          <el-button @click="showDateDialog = false">取消</el-button>
+          <el-button type="primary" @click="confirmPredict">确认预测</el-button>
+        </template>
+      </el-dialog>
+
       <!-- 筛选条件 -->
       <div class="filters">
         <el-date-picker
@@ -74,6 +102,10 @@ export default {
     const loading = ref(false)
     const filterDate = ref('')
     const filterType = ref('all')
+    const predictDate = ref('')
+    const dataDate = ref('')
+    const showDateDialog = ref(false)
+    const selectedDate = ref('')
 
     const loadPredictions = async () => {
       loading.value = true
@@ -86,19 +118,46 @@ export default {
           }
         })
         predictions.value = data
+
+        // 获取预测日期和数据日期
+        if (data.length > 0) {
+          predictDate.value = data[0].date || ''
+          dataDate.value = data[0].data_date || ''
+        } else {
+          predictDate.value = ''
+          dataDate.value = ''
+        }
       } catch (error) {
         ElMessage.error('加载预测结果失败')
+        predictDate.value = ''
+        dataDate.value = ''
       } finally {
         loading.value = false
       }
     }
 
     const handlePredict = async () => {
+      // 打开日期选择对话框，默认使用当前日期
+      selectedDate.value = new Date().toISOString().split('T')[0]
+      showDateDialog.value = true
+    }
+
+    const confirmPredict = async () => {
+      if (!selectedDate.value) {
+        ElMessage.warning('请选择预测日期')
+        return
+      }
+
       try {
-        await request.post('/api/predict/', {
-          predict_date: filterDate.value
+        await request.post('/api/predict/', null, {
+          params: { predict_date: selectedDate.value }
         })
         ElMessage.success('预测任务已创建')
+        showDateDialog.value = false
+
+        // 自动加载新的预测结果
+        filterDate.value = selectedDate.value
+        await loadPredictions()
       } catch (error) {
         ElMessage.error('创建预测任务失败')
       }
@@ -113,8 +172,13 @@ export default {
       loading,
       filterDate,
       filterType,
+      predictDate,
+      dataDate,
+      showDateDialog,
+      selectedDate,
       loadPredictions,
-      handlePredict
+      handlePredict,
+      confirmPredict
     }
   }
 }
@@ -129,6 +193,16 @@ export default {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.prediction-info {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px;
+  background-color: #f5f7fa;
+  border-radius: 4px;
+  flex-wrap: wrap;
 }
 
 .filters {
