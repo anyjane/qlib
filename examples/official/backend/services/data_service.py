@@ -13,6 +13,14 @@ import subprocess
 from config import settings
 from database import MongoDB
 
+# 使用 qlib_predictor 的全局初始化状态，确保整个应用只初始化一次 Qlib
+# 必须在 qlib_predictor 之后导入，避免循环依赖
+try:
+    from qlib_predictor import _QLIB_INITIALIZED
+except ImportError:
+    # 如果 qlib_predictor 尚未导入，使用本地状态（兼容性）
+    _QLIB_INITIALIZED = False
+
 
 __all__ = ['TencentDataService', 'standardize_stock_codes']
 
@@ -40,21 +48,22 @@ class TencentDataService:
     BASE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
     REQUEST_TIMEOUT = 30
 
-    # Qlib 初始化状态标志
-    _qlib_initialized = False
-
     @classmethod
     def _ensure_qlib_initialized(cls):
-        """确保 Qlib 已初始化（只初始化一次）"""
-        if not cls._qlib_initialized:
-            try:
+        """确保 Qlib 已初始化（使用共享的全局状态）"""
+        try:
+            # 使用 qlib_predictor 中的全局初始化状态
+            from qlib_predictor import _QLIB_INITIALIZED
+
+            if not _QLIB_INITIALIZED:
                 import qlib
                 qlib.init(provider_uri=settings.QLIB_PROVIDER_URI, region=settings.QLIB_REGION)
-                cls._qlib_initialized = True
-                logger.info("Qlib 初始化成功")
-            except Exception as e:
-                logger.error(f"Qlib 初始化失败: {e}")
-                raise
+                logger.info("Qlib 初始化成功 (data_service)")
+            else:
+                logger.debug("Qlib 已初始化 (data_service 使用共享状态)")
+        except Exception as e:
+            logger.error(f"Qlib 初始化失败: {e}")
+            raise
 
     @staticmethod
     def standardize_stock_codes(codes: List[str]) -> List[str]:
