@@ -125,6 +125,8 @@ async def execute_update_task(task_id: str, stocks: List[str]):
         stocks: 股票代码列表
     """
     all_data_dict = {}
+    # 记录每个股票实际下载的日期范围
+    stock_download_ranges = {}
 
     try:
         logger.info(f"[{task_id}] Starting update task for {len(stocks)} stocks")
@@ -163,6 +165,10 @@ async def execute_update_task(task_id: str, stocks: List[str]):
                 data_dict = await TencentDataService.download_from_tencent([code], start_date, end_date)
                 all_data_dict.update(data_dict)
 
+                # 记录实际下载的日期范围
+                if code in data_dict and data_dict[code].get("count", 0) > 0:
+                    stock_download_ranges[code] = {"start": start_date, "end": end_date}
+
                 # 推送进度
                 progress = int((idx + 1) / total_stocks * 100)
                 await manager.broadcast_task_update(task_id, {
@@ -184,7 +190,13 @@ async def execute_update_task(task_id: str, stocks: List[str]):
             "message": "正在保存数据到 Qlib 格式"
         })
 
-        save_results = TencentDataService.save_data_to_qlib_format(all_data_dict, default_start_date, end_date)
+        # 使用实际下载的日期范围来保存，并使用 update 模式
+        save_results = TencentDataService.save_data_to_qlib_format(
+            all_data_dict,
+            stock_download_ranges,
+            end_date,
+            use_update_mode=True  # 使用 dump_update 模式进行增量更新
+        )
 
         # 更新任务状态为"完成"
         await MongoDB.update_data_task(task_id, {

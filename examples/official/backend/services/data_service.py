@@ -40,6 +40,22 @@ class TencentDataService:
     BASE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
     REQUEST_TIMEOUT = 30
 
+    # Qlib 初始化状态标志
+    _qlib_initialized = False
+
+    @classmethod
+    def _ensure_qlib_initialized(cls):
+        """确保 Qlib 已初始化（只初始化一次）"""
+        if not cls._qlib_initialized:
+            try:
+                import qlib
+                qlib.init(provider_uri=settings.QLIB_PROVIDER_URI, region=settings.QLIB_REGION)
+                cls._qlib_initialized = True
+                logger.info("Qlib 初始化成功")
+            except Exception as e:
+                logger.error(f"Qlib 初始化失败: {e}")
+                raise
+
     @staticmethod
     def standardize_stock_codes(codes: List[str]) -> List[str]:
         """
@@ -144,18 +160,19 @@ class TencentDataService:
                 fetch_count = 0
                 max_fetches = 20  # 安全限制，防止无限循环
 
-                logger.info(f"开始下载 {code} 的数据，从 {start} 到 {end}")
+                logger.info(f"开始下载 {code} 的数据，从 {start} 到 {end}，最大条目: {max_fetches}")
 
                 while fetch_count < max_fetches:
                     fetch_count += 1
                     end_date_str = current_end_date.strftime("%Y-%m-%d")
 
-                    # 构造请求参数（start 为空表示从最早开始）
+                    # 构造请求参数
+                    # start 为空表示从最早开始，腾讯 API 会返回最多 count 条数据
                     # 格式: {symbol},{interval},{start},{end},{count},{qfq}
                     param = f"{code},day,,{end_date_str},2000,qfq"
                     url = f"{TencentDataService.BASE_URL}?param={param}"
 
-                    logger.debug(f"[{code}] 第 {fetch_count} 次请求，截止日期: {end_date_str}")
+                    logger.debug(f"[{code}] 第 {fetch_count} 次请求，参数: start=空, end={end_date_str}, count=2000")
 
                     response = requests.get(
                         url,
@@ -185,18 +202,20 @@ class TencentDataService:
                         logger.warning(f"[{code}] K线数据为空")
                         break
 
-                    # 添加到总数据中（注意：返回的数据是按时间降序排列的）
+                    # 添加到总数据中（注意：腾讯 API 返回的数据是按时间升序排列的）
                     all_data.extend(kline_data)
                     logger.info(f"[{code}] 获取到 {len(kline_data)} 条记录，累计 {len(all_data)} 条")
 
                     # 检查是否需要继续获取
-                    # 获取这批数据中最旧的日期（最后一条是最旧的）
-                    oldest_date_str = kline_data[-1][0]
+                    # 获取这批数据中最旧的日期（第一条是最旧的，数据是升序排列）
+                    oldest_date_str = kline_data[0][0]
                     try:
                         oldest_date = pd.Timestamp(oldest_date_str)
                     except Exception as e:
                         logger.error(f"[{code}] 解析日期失败: {oldest_date_str}, {e}")
                         break
+
+                    logger.info(f"[{code}] 本批次最旧日期: {oldest_date_str}，请求开始日期: {start}")
 
                     # 如果最旧的日期仍然晚于开始日期，需要继续往前获取
                     if oldest_date > start_timestamp:
@@ -250,14 +269,15 @@ class TencentDataService:
         return data_dict
 
     @staticmethod
-    def save_data_to_qlib_format(data_dict: dict, start_date: str, end_date: str) -> dict:
+    def save_data_to_qlib_format(data_dict: dict, download_ranges: dict, end_date: str, use_update_mode: bool = False) -> dict:
         """
         将下载的数据保存为 Qlib 格式
 
         Args:
             data_dict: {股票代码: API响应数据}
-            start_date: 开始日期
+            download_ranges: {股票代码: {start: 开始日期, end: 结束日期}} 或 start_date: 统一开始日期
             end_date: 结束日期
+            use_update_mode: 是否使用 dump_update 模式（增量更新）
 
         Returns:
             dict: {股票代码: 保存结果}
@@ -296,6 +316,17 @@ class TencentDataService:
                     continue
 
                 kline_data = symbol_data.get("qfqday") or symbol_data.get("day")
+
+                # 获取该股票的实际下载日期范围
+                if isinstance(download_ranges, dict) and code in download_ranges:
+                    code_start_date = download_ranges[code]["start"]
+                    logger.info(f"[{code}] 使用实际下载日期范围: {code_start_date} 到 {end_date}")
+                elif isinstance(download_ranges, str):
+                    code_start_date = download_ranges
+                    logger.info(f"[{code}] 使用统一日期范围: {code_start_date} 到 {end_date}")
+                else:
+                    code_start_date = "2015-01-01"
+                    logger.info(f"[{code}] 使用默认日期范围: {code_start_date} 到 {end_date}")
 
                 # 转换为 DataFrame
                 # 数据格式: [日期, 开盘, 收盘, 最高, 最低, 成交量]
@@ -344,8 +375,8 @@ class TencentDataService:
                 # 按日期排序
                 df = df.sort_values('date').reset_index(drop=True)
 
-                # 过滤日期范围
-                start_ts = pd.Timestamp(start_date)
+                # 过滤日期范围（使用实际下载的日期范围）
+                start_ts = pd.Timestamp(code_start_date)
                 end_ts = pd.Timestamp(end_date)
                 df = df[(df['date'] >= start_ts) & (df['date'] <= end_ts)]
 
@@ -386,22 +417,31 @@ class TencentDataService:
         try:
             logger.info(f"开始将数据转换为 Qlib 格式，目标目录: {qlib_dir}")
 
-            # 只对有新数据的股票删除旧数据
-            for code in updated_codes:
-                instrument_path = qlib_dir / "features" / code
-                if instrument_path.exists():
-                    shutil.rmtree(instrument_path)
-                    logger.info(f"[{code}] 删除旧数据")
+            # 只在 dump_fix 模式（非更新）下删除旧数据
+            # dump_update 模式下需要保留旧数据以便追加
+            if not use_update_mode:
+                # 只对有新数据的股票删除旧数据
+                for code in updated_codes:
+                    instrument_path = qlib_dir / "features" / code
+                    if instrument_path.exists():
+                        shutil.rmtree(instrument_path)
+                        logger.info(f"[{code}] 删除旧数据（dump_fix 模式）")
+            else:
+                logger.info("使用 dump_update 模式，保留旧数据以进行追加")
 
             # 使用 dump_bin.py 脚本来转换数据
             # 由于 dump_bin 有复杂的依赖，使用 subprocess 调用更可靠
             dump_script = Path(__file__).parent.parent.parent.parent.parent / "scripts" / "dump_bin.py"
 
+            # 根据模式选择 dump_fix（新增）或 dump_update（更新）
+            mode = "dump_update" if use_update_mode else "dump_fix"
+            logger.info(f"使用 {mode} 模式转换数据")
+
             cmd = [
                 sys.executable,
                 str(dump_script),
-                "dump_fix",
-                "--csv_path", str(normalize_dir),
+                mode,
+                "--data_path", str(normalize_dir),
                 "--qlib_dir", str(qlib_dir),
                 "--freq", "day",
                 "--date_field_name", "date",
@@ -447,11 +487,12 @@ class TencentDataService:
         import qlib
 
         try:
+            # 确保 Qlib 已初始化（只初始化一次）
+            TencentDataService._ensure_qlib_initialized()
+
             # 清除 Qlib 缓存以确保读取最新数据
             from qlib.data.cache import H
             H.clear()
-
-            qlib.init(provider_uri=settings.QLIB_PROVIDER_URI, region=settings.QLIB_REGION)
 
             # 读取数据获取起止日期和数量
             df = qlib.data.D.features([code], ["$close"], start_time="2015-01-01")
