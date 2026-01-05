@@ -2,6 +2,7 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
 import os
+from pathlib import Path
 
 
 class Settings(BaseSettings):
@@ -21,7 +22,7 @@ class Settings(BaseSettings):
     MONGODB_DB_NAME: str = "quant_system_db"
 
     # Qlib
-    QLIB_PROVIDER_URI: str = "~/.qlib/qlib_data/cn_data"
+    QLIB_PROVIDER_URI: str = str(Path(__file__).parent / "qlib_data")
     QLIB_REGION: str = "cn"
 
     # Qlib Online Mode
@@ -30,7 +31,7 @@ class Settings(BaseSettings):
     REDIS_TASK_DB: int = 1
     EXPRESSION_CACHE: str = "DiskExpressionCache"
     DATASET_CACHE: str = "DiskDatasetCache"
-    LOCAL_CACHE_PATH: str = "~/.cache/qlib_simple_cache"
+    LOCAL_CACHE_PATH: str = str(Path(__file__).parent / "qlib_data" / ".cache" / "qlib_simple_cache")
 
     # Logging
     LOG_LEVEL: str = "INFO"
