@@ -62,7 +62,7 @@ async def test_predict_with_stocks(client, populated_stocks_db):
 
     response = await api_client.post(
         "/api/predict/",
-        json={"stocks": stocks}
+        json=stocks
     )
     assert_success_response(response, 200)
 

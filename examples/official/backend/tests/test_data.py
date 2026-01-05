@@ -86,7 +86,7 @@ async def test_download_data_with_stocks(client, populated_stocks_db):
 
     response = await api_client.post(
         "/api/data/download",
-        json={"stocks": stocks}
+        json=stocks
     )
     assert_success_response(response, 200)
 
@@ -109,7 +109,7 @@ async def test_download_data_empty_stocks(client):
     api_client = APITestClient(client)
     response = await api_client.post(
         "/api/data/download",
-        json={"stocks": []}
+        json=[]
     )
     # 应该仍然能创建任务
     assert_success_response(response, 200)
@@ -139,7 +139,7 @@ async def test_update_data_with_stocks(client, populated_stocks_db):
 
     response = await api_client.post(
         "/api/data/update",
-        json={"stocks": stocks}
+        json=stocks
     )
     assert_success_response(response, 200)
 

@@ -1,8 +1,10 @@
 """Prediction API"""
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Body
 from typing import List, Optional
 from datetime import datetime
 from loguru import logger
+
+from database import MongoDB
 
 router = APIRouter(prefix="/api/predict", tags=["Predict"])
 
@@ -11,7 +13,7 @@ router = APIRouter(prefix="/api/predict", tags=["Predict"])
 async def predict(
     background_tasks: BackgroundTasks,
     predict_date: str = None,
-    stocks: List[str] = None
+    stocks: Optional[List[str]] = Body(default=None)
 ):
     """
     执行预测（默认最新数据）
@@ -24,10 +26,14 @@ async def predict(
         任务信息
     """
     try:
-        from ..database import MongoDB
-
         if predict_date is None:
             predict_date = datetime.now().strftime("%Y-%m-%d")
+        else:
+            # 验证日期格式
+            try:
+                datetime.strptime(predict_date, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="日期格式无效，请使用 YYYY-MM-DD 格式")
 
         # 获取所有启用的股票
         stocks_data = await MongoDB.get_stocks(enabled_only=True)
@@ -56,6 +62,8 @@ async def predict(
             "predict_date": predict_date,
             "stocks_count": len(stocks)
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to create prediction task: {e}")
         raise HTTPException(status_code=500, detail=f"创建预测任务失败: {str(e)}")
@@ -85,7 +93,9 @@ async def get_predictions(
         预测结果列表
     """
     try:
-        from ..database import MongoDB
+        # 如果 limit 为 0，直接返回空列表
+        if limit == 0:
+            return []
 
         query = {}
         if date:
@@ -95,7 +105,6 @@ async def get_predictions(
 
         # 持仓筛选
         if filter_type != "all":
-            from ..database import MongoDB
             positions = await MongoDB.get_positions()
             position_codes = set(p["code"] for p in positions)
 
@@ -114,24 +123,21 @@ async def get_predictions(
         }.get(sort_by, "score")
 
         # 查询预测结果
-        cursor = await MongoDB.get_predictions(
+        predictions = await MongoDB.get_predictions(
             query=query,
             sort=[(sort_field, sort_order)],
             limit=limit
         )
 
-        predictions = await cursor.to_list(length=None)
-
         # 标记持仓状态
         if filter_type != "all":
-            from ..database import MongoDB
             positions = await MongoDB.get_positions()
             position_codes = set(p["code"] for p in positions)
 
             for pred in predictions:
                 pred["is_held"] = pred["code"] in position_codes
 
-        return predictions
+        return predictions if predictions else []
     except Exception as e:
         logger.error(f"Failed to get predictions: {e}")
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")

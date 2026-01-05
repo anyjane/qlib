@@ -117,14 +117,15 @@ async def test_update_agent_config(client, sample_agent_config_create):
     """测试更新代理配置"""
     # 先创建
     from database import MongoDB
+    from datetime import datetime
     await MongoDB.database.agent_configs.insert_one({
         "agent_id": "test_agent_001",
         "agent_url": "http://old.example.com",
         "agent_token": "old_token",
         "agent_name": "Old Name",
         "is_primary": False,
-        "created_at": pytest.helpers.datetime.utcnow(),
-        "updated_at": pytest.helpers.datetime.utcnow()
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow()
     })
 
     api_client = APITestClient(client)
@@ -151,6 +152,7 @@ async def test_update_agent_config_not_found(client, sample_agent_config_create)
 async def test_delete_agent_config(client, populated_agents_db):
     """测试删除代理配置"""
     from database import MongoDB
+    from datetime import datetime
     # 创建一个临时代理
     await MongoDB.database.agent_configs.insert_one({
         "agent_id": "temp_agent_001",
@@ -158,8 +160,8 @@ async def test_delete_agent_config(client, populated_agents_db):
         "agent_token": "temp_token",
         "agent_name": "Temp Agent",
         "is_primary": False,
-        "created_at": pytest.helpers.datetime.utcnow(),
-        "updated_at": pytest.helpers.datetime.utcnow()
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow()
     })
 
     api_client = APITestClient(client)
@@ -298,7 +300,7 @@ async def test_submit_agent_orders_buy(client):
     response = await api_client.post(
         "/api/agent/orders",
         params={"action": "buy"},
-        json={"stocks": stocks}
+        json=stocks
     )
     # 可能返回 200 或 500（取决于代理是否可用）
     assert response.status_code in [200, 500]
@@ -315,7 +317,7 @@ async def test_submit_agent_orders_sell(client):
     response = await api_client.post(
         "/api/agent/orders",
         params={"action": "sell"},
-        json={"stocks": stocks}
+        json=stocks
     )
     assert response.status_code in [200, 500]
 
@@ -331,7 +333,7 @@ async def test_submit_agent_orders_cancel(client):
     response = await api_client.post(
         "/api/agent/orders",
         params={"action": "cancel"},
-        json={"stocks": stocks}
+        json=stocks
     )
     assert response.status_code in [200, 500]
 
@@ -343,7 +345,7 @@ async def test_submit_agent_orders_invalid_action(client):
     response = await api_client.post(
         "/api/agent/orders",
         params={"action": "invalid"},
-        json={"stocks": []}
+        json=[]
     )
     # 可能返回 400 或 500
     assert response.status_code in [400, 500]
@@ -460,7 +462,7 @@ async def test_submit_orders_empty_list(client):
     response = await api_client.post(
         "/api/agent/orders",
         params={"action": "buy"},
-        json={"stocks": []}
+        json=[]
     )
     # 空列表可能被接受或拒绝
     assert response.status_code in [200, 400, 500]

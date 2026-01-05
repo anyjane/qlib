@@ -26,7 +26,9 @@ class AgentService:
 
         await MongoDB.create_agent_config(agent_dict)
 
-        return agent_dict
+        # 返回插入后的完整配置（不包括 _id）
+        result = await MongoDB.get_agent_config(agent_id)
+        return result
 
     @staticmethod
     async def update_agent_config(agent_id: str, config: AgentConfigCreate):
@@ -227,6 +229,11 @@ class AgentService:
         Returns:
             心跳检测结果（是否可用）
         """
+        # 检查代理是否存在
+        config = await MongoDB.get_agent_config(agent_id)
+        if not config:
+            raise ValueError("Agent not found")
+
         try:
             # 尝试获取资产信息
             asset_info = await AgentService.get_agent_asset_info(agent_id)

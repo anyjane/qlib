@@ -194,7 +194,7 @@ class MongoDB:
                 pred["code"] = str(pred["code"])
             if "name" in pred and pred["name"] is not None:
                 pred["name"] = str(pred["name"])
-        return predictions
+        return predictions if predictions else []
 
     @classmethod
     async def insert_prediction(cls, prediction_dict: Dict):
@@ -219,7 +219,7 @@ class MongoDB:
     @classmethod
     async def create_agent_config(cls, agent_dict: Dict):
         """Create agent config"""
-        await cls.database.agent_configs.insert_one(agent_dict)
+        await cls.database.agent_configs.insert_one(dict(agent_dict))
 
     @classmethod
     async def update_agent_config(cls, agent_id: str, update_dict: Dict):

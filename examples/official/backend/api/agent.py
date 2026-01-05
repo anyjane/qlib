@@ -222,7 +222,7 @@ async def get_agent_asset_info(agent_id: str):
 
 
 @router.post("/orders")
-async def submit_agent_orders(action: str, stocks: List[dict]):
+async def submit_agent_orders(action: str, stocks: List[dict] = None):
     """
     提交交易订单到代理
 
@@ -235,6 +235,10 @@ async def submit_agent_orders(action: str, stocks: List[dict]):
     """
     try:
         from services.agent_service import AgentService
+
+        # 如果 stocks 为 None，设置为空列表
+        if stocks is None:
+            stocks = []
 
         result = await AgentService.submit_orders(action, stocks)
 
@@ -308,6 +312,10 @@ async def heartbeat_agent(agent_id: str):
         result = await AgentService.heartbeat_agent(agent_id)
 
         return result
+    except ValueError as e:
+        if "not found" in str(e).lower():
+            raise HTTPException(status_code=404, detail="代理不存在")
+        raise
     except Exception as e:
         logger.error(f"Failed to heartbeat agent: {e}")
         raise HTTPException(status_code=500, detail=f"心跳检测失败: {str(e)}")

@@ -176,3 +176,19 @@ class TradeCandidates(BaseModel):
 class LogBatchDownload(BaseModel):
     """批量下载日志请求模型"""
     filenames: List[str] = Field(..., description="日志文件名列表")
+
+
+# ============================================================================
+# Data Download Models
+# ============================================================================
+
+class DataDownloadRequest(BaseModel):
+    """数据下载请求模型"""
+    start_date: Optional[str] = Field(default="2015-01-01", description="开始日期")
+    end_date: Optional[str] = Field(default=None, description="结束日期")
+    stocks: Optional[List[str]] = Field(default=None, description="股票代码列表")
+
+
+class DataUpdateRequest(BaseModel):
+    """数据更新请求模型"""
+    stocks: Optional[List[str]] = Field(default=None, description="股票代码列表")

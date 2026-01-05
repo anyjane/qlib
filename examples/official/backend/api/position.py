@@ -107,8 +107,18 @@ async def import_positions(file: UploadFile = File(...)):
         import pandas as pd
         from io import BytesIO
 
+        # 验证文件格式
+        if not file.filename.endswith('.csv'):
+            raise HTTPException(status_code=400, detail="不支持的文件格式，仅支持 CSV 文件")
+
         content = await file.read()
         df = pd.read_csv(BytesIO(content))
+
+        # 验证必需列
+        required_columns = ['code', 'quantity', 'cost_price']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise HTTPException(status_code=400, detail=f"缺少必需的列: {', '.join(missing_columns)}")
 
         imported = 0
         for _, row in df.iterrows():
@@ -139,6 +149,8 @@ async def import_positions(file: UploadFile = File(...)):
             "imported": imported,
             "total": len(df)
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to import positions: {e}")
         raise HTTPException(status_code=500, detail=f"导入失败: {str(e)}")

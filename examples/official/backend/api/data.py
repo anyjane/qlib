@@ -1,5 +1,5 @@
 """Data management API"""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Body
 from typing import List, Optional
 from datetime import datetime
 from loguru import logger
@@ -24,8 +24,8 @@ async def get_latest_data_date():
 @router.post("/download")
 async def download_data(
     start_date: str = "2015-01-01",
-    end_date: str = None,
-    stocks: List[str] = None
+    end_date: Optional[str] = None,
+    stocks: Optional[List[str]] = Body(default=None)
 ):
     """
     下载数据
@@ -39,6 +39,18 @@ async def download_data(
         任务信息
     """
     try:
+        # 验证日期格式
+        try:
+            datetime.strptime(start_date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="日期格式无效，请使用 YYYY-MM-DD 格式")
+
+        if end_date is not None:
+            try:
+                datetime.strptime(end_date, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(status_code=400, detail="日期格式无效，请使用 YYYY-MM-DD 格式")
+
         if end_date is None:
             end_date = datetime.now().strftime("%Y-%m-%d")
 
@@ -60,13 +72,17 @@ async def download_data(
             "start_date": start_date,
             "end_date": end_date
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to create download task: {e}")
         raise HTTPException(status_code=500, detail=f"创建任务失败: {str(e)}")
 
 
 @router.post("/update")
-async def update_data(stocks: List[str] = None):
+async def update_data(
+    stocks: Optional[List[str]] = Body(default=None)
+):
     """
     增量更新数据
 
