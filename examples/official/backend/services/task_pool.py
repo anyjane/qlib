@@ -1,5 +1,6 @@
 """Process pool manager for background task execution"""
 import logging
+import signal
 from typing import Optional, Dict, Any
 from multiprocessing import Pool, cpu_count, Manager
 import threading
@@ -63,6 +64,7 @@ class TaskPoolManager:
         self.dispatcher: Optional[TaskDispatcher] = None
 
         self.initialized = False
+        self._stop_requested = False  # 用于优雅停止
         self.logger = logging.getLogger(__name__)
     
     def start(self):
@@ -100,23 +102,36 @@ class TaskPoolManager:
             self.logger.warning("TaskPoolManager not started")
             return
 
+        self._stop_requested = True
+
         try:
             self.logger.info("Stopping TaskPoolManager...")
 
-            # 停止任务分发器
+            # 1. 先停止任务分发器，让它退出循环
             if self.dispatcher:
                 self.dispatcher.stop()
 
-            # 关闭队列
+            # 2. 等待分发器完全停止
+            import time
+            time.sleep(0.5)  # 给线程一点时间退出循环
+
+            # 3. 关闭队列
             self.task_queue.close()
 
-            # 关闭进程池
+            # 4. 关闭进程池（使用超时避免阻塞）
             if self.pool:
                 self.pool.close()
-                self.pool.join()
-                self.logger.info("Process pool closed and joined")
+                try:
+                    self.pool.join(timeout=3)  # 等待 3 秒
+                    self.logger.info("Process pool closed and joined")
+                except:
+                    # 超时后强制终止
+                    self.logger.warning("Process pool did not stop gracefully, terminating...")
+                    self.pool.terminate()
+                    self.pool.join(timeout=2)
+                    self.logger.info("Process pool terminated")
 
-            # 关闭进度队列和管理器
+            # 5. 关闭进度队列和管理器
             if self.manager:
                 self.progress_queue.close()
                 self.progress_queue.join_thread()
@@ -203,14 +218,17 @@ def initialize_task_pool(
     pool_size: Optional[int] = None,
     max_queue_size: int = 100,
     enable_progress_queue: bool = True
-):
+) -> TaskPoolManager:
     """
     初始化全局任务池管理器
-    
+
     Args:
         pool_size: 进程池大小
         max_queue_size: 任务队列最大长度
         enable_progress_queue: 是否启用进度队列
+
+    Returns:
+        TaskPoolManager 实例
     """
     global _task_pool_manager
     if _task_pool_manager is None:
@@ -220,3 +238,4 @@ def initialize_task_pool(
             enable_progress_queue=enable_progress_queue
         )
     _task_pool_manager.start()
+    return _task_pool_manager

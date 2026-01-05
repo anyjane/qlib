@@ -13,14 +13,6 @@ import subprocess
 from config import settings
 from database import MongoDB
 
-# 使用 qlib_predictor 的全局初始化状态，确保整个应用只初始化一次 Qlib
-# 必须在 qlib_predictor 之后导入，避免循环依赖
-try:
-    from qlib_predictor import _QLIB_INITIALIZED
-except ImportError:
-    # 如果 qlib_predictor 尚未导入，使用本地状态（兼容性）
-    _QLIB_INITIALIZED = False
-
 
 __all__ = ['TencentDataService', 'standardize_stock_codes']
 
@@ -47,23 +39,6 @@ class TencentDataService:
 
     BASE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
     REQUEST_TIMEOUT = 30
-
-    @classmethod
-    def _ensure_qlib_initialized(cls):
-        """确保 Qlib 已初始化（使用共享的全局状态）"""
-        try:
-            # 使用 qlib_predictor 中的全局初始化状态
-            from qlib_predictor import _QLIB_INITIALIZED
-
-            if not _QLIB_INITIALIZED:
-                import qlib
-                qlib.init(provider_uri=settings.QLIB_PROVIDER_URI, region=settings.QLIB_REGION)
-                logger.info("Qlib 初始化成功 (data_service)")
-            else:
-                logger.debug("Qlib 已初始化 (data_service 使用共享状态)")
-        except Exception as e:
-            logger.error(f"Qlib 初始化失败: {e}")
-            raise
 
     @staticmethod
     def standardize_stock_codes(codes: List[str]) -> List[str]:
@@ -492,43 +467,63 @@ class TencentDataService:
     
     @staticmethod
     async def get_stock_data_info(code: str) -> dict:
-        """从 Qlib 读取股票数据信息"""
-        import qlib
+        """
+        从文件系统检查股票数据信息（不初始化 Qlib）
 
+        直接检查 Qlib 二进制数据文件是否存在
+        """
         try:
-            # 确保 Qlib 已初始化（只初始化一次）
-            TencentDataService._ensure_qlib_initialized()
+            data_path = Path(settings.QLIB_PROVIDER_URI).expanduser()
+            instrument_path = data_path / "features" / code
 
-            # 清除 Qlib 缓存以确保读取最新数据
-            from qlib.data.cache import H
-            H.clear()
+            if not instrument_path.exists():
+                return {"has_data": False}
 
-            # 读取数据获取起止日期和数量
-            df = qlib.data.D.features([code], ["$close"], start_time="2015-01-01")
+            # 检查是否有数据文件（.bin 或 .h5 文件）
+            bin_files = list(instrument_path.glob("**/*.bin"))
+            h5_files = list(instrument_path.glob("**/*.h5"))
 
-            if not df.empty:
-                # DataFrame 的 index 是 MultiIndex (instrument, datetime)
-                start_date = df.index.get_level_values(1).min()
-                end_date = df.index.get_level_values(1).max()
+            if not bin_files and not h5_files:
+                return {"has_data": False}
+
+            # 获取最早和最晚的数据文件（基于文件名中的日期）
+            all_files = bin_files + h5_files
+            all_files.sort()
+
+            # 尝试从文件名中提取日期信息
+            dates = []
+            for f in all_files:
+                # Qlib 文件名格式通常包含日期信息
+                stem = f.stem
+                # 简单的日期提取逻辑（可能需要根据实际情况调整）
+                if len(stem) >= 8 and stem[:8].isdigit():
+                    try:
+                        date_str = f"{stem[:4]}-{stem[4:6]}-{stem[6:8]}"
+                        dates.append(pd.Timestamp(date_str))
+                    except:
+                        pass
+
+            if dates:
+                start_date = min(dates)
+                end_date = max(dates)
                 return {
                     "has_data": True,
                     "start_date": start_date.strftime("%Y-%m-%d"),
                     "end_date": end_date.strftime("%Y-%m-%d"),
-                    "count": len(df)
+                    "count": len(all_files)
                 }
             else:
-                logger.debug(f"No data found for stock {code}")
-                return {"has_data": False}
+                # 无法从文件名提取日期，但文件存在
+                return {
+                    "has_data": True,
+                    "start_date": None,
+                    "end_date": None,
+                    "count": len(all_files)
+                }
 
         except Exception as e:
-            # 特定错误：数据不存在或频率错误
-            error_msg = str(e)
-            if "can't find a freq" in error_msg or "empty" in error_msg.lower():
-                logger.debug(f"Stock {code} has no data: {e}")
-                return {"has_data": False}
-            else:
-                logger.error(f"Failed to get data info for {code}: {e}")
-                return {"has_data": False}
+            logger.error(f"Failed to get data info for {code}: {e}")
+            return {"has_data": False}
     
     @staticmethod
     async def delete_stock_data(code: str):

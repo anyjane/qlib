@@ -4,11 +4,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from loguru import logger
 import sys
-from typing import Dict, Set
+import signal
+from typing import Dict, Set, Optional
 
 from config import settings
 from database import MongoDB
-from services.task_pool import initialize_task_pool, TaskPoolManager
+from services.task_pool import initialize_task_pool, get_task_pool_manager
 
 # ============================================================================
 # WebSocket Connection Manager
@@ -81,11 +82,20 @@ logger.add(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events"""
+    # Setup signal handler for graceful shutdown
+    def handle_signal(signum, frame):
+        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+        # 标记请求停止，让 lifespan 的 shutdown 部分处理
+        pass
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
     # Startup
     logger.info("Starting Quantitative Investment Management System...")
     await MongoDB.connect_to_mongodb()
-    
-    # 初始化任务进程池
+
+    # 初始化任务进程池（TaskPoolManager 是单例，initialize_task_pool 返回实例）
     logger.info("Initializing task process pool...")
     task_pool_manager = initialize_task_pool(
         pool_size=4,  # 可以根据需要调整进程数
@@ -93,17 +103,21 @@ async def lifespan(app: FastAPI):
         enable_progress_queue=True
     )
     logger.info("Task process pool initialized successfully")
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down...")
-    
-    # 停止任务进程池
+
+    # 停止任务进程池（使用 get_task_pool_manager 获取单例实例）
     logger.info("Stopping task process pool...")
-    task_pool_manager.stop()
-    logger.info("Task process pool stopped")
-    
+    pool_manager = get_task_pool_manager()
+    if pool_manager.is_initialized():
+        pool_manager.stop()
+        logger.info("Task process pool stopped")
+    else:
+        logger.warning("Task pool manager was not initialized")
+
     await MongoDB.close_mongodb()
 
 

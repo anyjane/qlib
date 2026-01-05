@@ -10,11 +10,11 @@ logger = logging.getLogger(__name__)
 
 class TaskQueue:
     """任务队列类，用于在主进程和工作进程之间传递任务"""
-    
+
     def __init__(self, maxsize: int = 100):
         """
         初始化任务队列
-        
+
         Args:
             maxsize: 队列最大长度
         """
@@ -23,6 +23,7 @@ class TaskQueue:
         self.task_queue = self.manager.Queue(maxsize=maxsize)
         self.result_queue = self.manager.Queue(maxsize=maxsize)
         self.logger = logging.getLogger(__name__)
+        self._closed = False  # 添加关闭标志
     
     def put_task(self, task_params: Dict[str, Any]) -> bool:
         """
@@ -45,39 +46,55 @@ class TaskQueue:
     def get_task(self, timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
         """
         从队列中获取任务
-        
+
         Args:
             timeout: 超时时间（秒），None 表示无限等待
-            
+
         Returns:
             任务参数字典，超时返回 None
         """
+        # 如果队列已关闭，直接返回 None
+        if self._closed:
+            return None
+
         try:
             task_params = self.task_queue.get(timeout=timeout)
             self.logger.debug(f"Task {task_params.get('task_id')} retrieved from queue")
             return task_params
         except Empty:
             return None
+        except BrokenPipeError:
+            # 队列被关闭时的预期错误，静默处理
+            return None
         except Exception as e:
-            self.logger.error(f"Failed to get task from queue: {e}")
+            # 只在非关闭状态下记录错误
+            if not self._closed:
+                self.logger.error(f"Failed to get task from queue: {e}")
             return None
     
     def put_result(self, result: Dict[str, Any]) -> bool:
         """
         将任务结果放入结果队列
-        
+
         Args:
             result: 任务结果字典
-            
+
         Returns:
             是否成功放入队列
         """
+        if self._closed:
+            return False
+
         try:
             self.result_queue.put(result, timeout=5)
             self.logger.debug(f"Result for task {result.get('task_id')} added to result queue")
             return True
+        except BrokenPipeError:
+            # 队列被关闭时的预期错误
+            return False
         except Exception as e:
-            self.logger.error(f"Failed to add result to queue: {e}")
+            if not self._closed:
+                self.logger.error(f"Failed to add result to queue: {e}")
             return False
     
     def get_result(self, timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
@@ -112,9 +129,14 @@ class TaskQueue:
     
     def close(self):
         """关闭队列"""
-        self.task_queue.close()
-        self.result_queue.close()
-        self.manager.shutdown()
+        self._closed = True
+        try:
+            self.task_queue.close()
+            self.result_queue.close()
+            self.manager.shutdown()
+        except Exception as e:
+            # 忽略关闭时的错误
+            self.logger.debug(f"Queue close error (expected): {e}")
     
     def size(self) -> int:
         """获取队列大小"""
@@ -147,7 +169,7 @@ class TaskDispatcher:
         
         self.running = True
         self.result_queue = self.task_queue.result_queue
-        self.dispatcher_thread = threading.Thread(target=self._dispatch_loop, daemon=True)
+        self.dispatcher_thread = threading.Thread(target=self._dispatch_loop, daemon=False)
         self.dispatcher_thread.start()
         self.logger.info("Task dispatcher started")
     
@@ -155,10 +177,17 @@ class TaskDispatcher:
         """停止任务分发器"""
         if not self.running:
             return
-        
+
+        # 先设置 running 标志，让循环退出
         self.running = False
-        if self.dispatcher_thread:
-            self.dispatcher_thread.join(timeout=5)
+
+        # 等待线程完全停止
+        if self.dispatcher_thread and self.dispatcher_thread.is_alive():
+            # 给线程一些时间自然退出
+            self.dispatcher_thread.join(timeout=2)
+            if self.dispatcher_thread.is_alive():
+                self.logger.warning("Dispatcher thread did not stop gracefully, forcing exit")
+
         self.logger.info("Task dispatcher stopped")
     
     def _dispatch_loop(self):
@@ -182,7 +211,12 @@ class TaskDispatcher:
                 )
                 
             except Exception as e:
-                self.logger.error(f"Error in dispatch loop: {e}")
+                # 只在仍在运行时记录错误，避免在停止时写日志
+                if self.running:
+                    self.logger.error(f"Error in dispatch loop: {e}")
+        
+        # 线程退出前清理
+        self.logger.debug("Dispatch loop exiting")
     
     def _worker_wrapper(self, task_params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -202,20 +236,24 @@ class TaskDispatcher:
     def _task_callback(self, result: Dict[str, Any]):
         """
         任务完成回调函数
-        
+
         Args:
             result: 任务结果
         """
+        # 如果已经停止，不处理回调
+        if not self.running:
+            return
+
         task_id = result.get("task_id")
         self.logger.info(f"Task {task_id} completed with status: {result.get('status')}")
-        
+
         # 直接更新到数据库和 WebSocket（在主线程中）
         try:
             from ..database import MongoDB
             from ..models import TaskStatus
-            
+
             task_type = result.get("task_type")
-            
+
             # 根据任务类型更新不同的集合
             if task_type == "data_download" or task_type == "data_update":
                 # 同步调用（使用 asyncio.run 确保在事件循环中）
@@ -230,19 +268,24 @@ class TaskDispatcher:
                     asyncio.create_task(self._update_to_db_and_ws(result))
                 else:
                     loop.run_until_complete(self._update_to_db_and_ws(result))
-            
+
         except Exception as e:
-            self.logger.error(f"Failed to handle task result: {e}")
+            if self.running:
+                self.logger.error(f"Failed to handle task result: {e}")
     
     def _task_error_callback(self, error):
         """
         任务错误回调函数
-        
+
         Args:
             error: 错误对象
         """
+        # 如果已经停止，不处理错误回调
+        if not self.running:
+            return
+
         self.logger.error(f"Task failed with error: {error}")
-        
+
         # 构造错误结果
         result = {
             "task_id": "unknown",
@@ -250,11 +293,11 @@ class TaskDispatcher:
             "error": str(error),
             "completed_at": None
         }
-        
+
         try:
             from ..database import MongoDB
             from ..websocket_manager import WebSocketManager
-            
+
             # 更新数据库
             loop = asyncio.get_event_loop()
             if loop.is_running():
@@ -262,7 +305,8 @@ class TaskDispatcher:
             else:
                 loop.run_until_complete(self._update_error_to_db_and_ws(result))
         except Exception as e:
-            self.logger.error(f"Failed to handle task error: {e}")
+            if self.running:
+                self.logger.error(f"Failed to handle task error: {e}")
     
     async def _update_to_db_and_ws(self, result: Dict[str, Any]):
         """

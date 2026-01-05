@@ -2,6 +2,7 @@
 import logging
 import os
 import sys
+import signal
 from typing import Dict, Any
 from datetime import datetime
 
@@ -40,23 +41,26 @@ def init_worker_process():
     工作进程初始化函数
     在进程池创建时调用，每个工作进程只调用一次
     """
+    # 忽略 SIGINT 信号，让主进程处理
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
     global _qlib_initialized
-    
+
     if _qlib_initialized:
         logger.info("Qlib already initialized in this worker process")
         return
-    
+
     try:
         # 使用配置中的 provider_uri 和 region
         provider_uri = settings.QLIB_PROVIDER_URI
         region = settings.QLIB_REGION.upper()
-        
+
         # 如果 region 是 'cn'，则使用 REG_CN，否则直接使用字符串
         region_config = REG_CN if region == "CN" else region
-        
+
         qlib.init(provider_uri=provider_uri, region=region_config)
         _qlib_initialized = True
-        
+
         logger.info(f"Worker process {os.getpid()} initialized Qlib successfully with provider_uri={provider_uri}, region={region}")
     except Exception as e:
         logger.error(f"Failed to initialize Qlib in worker process: {e}")
