@@ -8,6 +8,7 @@ from typing import Dict, Set
 
 from config import settings
 from database import MongoDB
+from services.task_pool import initialize_task_pool, TaskPoolManager
 
 # ============================================================================
 # WebSocket Connection Manager
@@ -33,15 +34,20 @@ class ConnectionManager:
             self.active_connections[client_id].discard(websocket)
             logger.info(f"WebSocket client disconnected: {client_id}")
     
-    async def broadcast_task_update(self, task_id: str, update_data: dict):
-        """广播任务更新到所有连接的客户端"""
+    async def broadcast_task_update(self, update_data: dict):
+        """广播任务更新到所有连接的客户端
+        
+        Args:
+            update_data: 包含 task_id 和其他更新信息的字典
+        """
         disconnected = set()
+        task_id = update_data.get("task_id", "unknown")
+        
         for client_id, connections in self.active_connections.items():
             for connection in connections:
                 try:
                     await connection.send_json({
                         "type": "task_update",
-                        "task_id": task_id,
                         "data": update_data
                     })
                 except Exception as e:
@@ -78,9 +84,26 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Quantitative Investment Management System...")
     await MongoDB.connect_to_mongodb()
+    
+    # 初始化任务进程池
+    logger.info("Initializing task process pool...")
+    task_pool_manager = initialize_task_pool(
+        pool_size=4,  # 可以根据需要调整进程数
+        max_queue_size=100,
+        enable_progress_queue=True
+    )
+    logger.info("Task process pool initialized successfully")
+    
     yield
+    
     # Shutdown
     logger.info("Shutting down...")
+    
+    # 停止任务进程池
+    logger.info("Stopping task process pool...")
+    task_pool_manager.stop()
+    logger.info("Task process pool stopped")
+    
     await MongoDB.close_mongodb()
 
 

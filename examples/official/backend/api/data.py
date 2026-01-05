@@ -1,5 +1,5 @@
 """Data management API"""
-from fastapi import APIRouter, HTTPException, Body, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Body
 from typing import List, Optional
 from datetime import datetime
 from loguru import logger
@@ -8,9 +8,7 @@ import pandas as pd
 
 from database import MongoDB
 from services.data_service import TencentDataService
-
-# 导入 WebSocket 管理器
-from main import manager
+from services.task_pool import get_task_pool_manager
 
 router = APIRouter(prefix="/api/data", tags=["Data"])
 
@@ -246,15 +244,11 @@ async def get_latest_data_date():
 
 
 @router.post("/download")
-async def download_data(
-    background_tasks: BackgroundTasks,
-    request_data: DownloadRequest
-):
+async def download_data(request_data: DownloadRequest):
     """
     下载数据
 
     Args:
-        background_tasks: FastAPI BackgroundTasks
         request_data: 请求数据，包含日期范围和股票列表
 
     Returns:
@@ -267,6 +261,13 @@ async def download_data(
     stocks = request_data.stocks
 
     try:
+        # 获取任务池管理器
+        task_pool_manager = get_task_pool_manager()
+        
+        # 检查进程池是否已初始化
+        if not task_pool_manager.is_initialized():
+            raise HTTPException(status_code=500, detail="任务池未初始化，请检查服务启动")
+
         # 如果未指定股票，获取所有启用的股票
         if stocks is None:
             stocks_data = await MongoDB.get_stocks(enabled_only=True)
@@ -280,10 +281,21 @@ async def download_data(
             stocks=stocks or []
         )
 
-        # 添加后台任务执行下载
-        background_tasks.add_task(execute_download_task, task_id, start_date, end_date, stocks or [])
+        # 提交任务到进程池
+        task_params = {
+            "task_type": "data_download",
+            "task_id": task_id,
+            "start_date": start_date,
+            "end_date": end_date,
+            "stocks": stocks or []
+        }
+        
+        success = task_pool_manager.submit_task(task_params)
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="提交任务到进程池失败")
 
-        logger.info(f"Data download task created: {task_id}, background task scheduled")
+        logger.info(f"Data download task created: {task_id}, submitted to process pool")
 
         return {
             "task_id": task_id,
@@ -301,15 +313,11 @@ async def download_data(
 
 
 @router.post("/update")
-async def update_data(
-    background_tasks: BackgroundTasks,
-    request_data: StockListRequest
-):
+async def update_data(request_data: StockListRequest):
     """
     增量更新数据
 
     Args:
-        background_tasks: FastAPI BackgroundTasks
         request_data: 请求数据，包含股票列表
 
     Returns:
@@ -318,6 +326,13 @@ async def update_data(
     stocks = request_data.stocks
 
     try:
+        # 获取任务池管理器
+        task_pool_manager = get_task_pool_manager()
+        
+        # 检查进程池是否已初始化
+        if not task_pool_manager.is_initialized():
+            raise HTTPException(status_code=500, detail="任务池未初始化，请检查服务启动")
+
         # 如果未指定股票，获取所有启用的股票
         if stocks is None:
             stocks_data = await MongoDB.get_stocks(enabled_only=True)
@@ -327,10 +342,19 @@ async def update_data(
         # 创建更新任务
         task_id = await TencentDataService.create_update_task(stocks=stocks or [])
 
-        # 添加后台任务执行更新
-        background_tasks.add_task(execute_update_task, task_id, stocks or [])
+        # 提交任务到进程池
+        task_params = {
+            "task_type": "data_update",
+            "task_id": task_id,
+            "stocks": stocks or []
+        }
+        
+        success = task_pool_manager.submit_task(task_params)
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="提交任务到进程池失败")
 
-        logger.info(f"Data update task created: {task_id}, background task scheduled")
+        logger.info(f"Data update task created: {task_id}, submitted to process pool")
 
         return {
             "task_id": task_id,

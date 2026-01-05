@@ -1,7 +1,8 @@
 """Pydantic models for API requests and responses"""
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
+from enum import Enum
 
 
 # ============================================================================
@@ -192,3 +193,34 @@ class DataDownloadRequest(BaseModel):
 class DataUpdateRequest(BaseModel):
     """数据更新请求模型"""
     stocks: Optional[List[str]] = Field(default=None, description="股票代码列表")
+
+
+# ============================================================================
+# Task Pool Models
+# ============================================================================
+
+class TaskType(str, Enum):
+    """任务类型枚举"""
+    DATA_DOWNLOAD = "data_download"
+    DATA_UPDATE = "data_update"
+    PREDICTION = "prediction"
+    TRAINING = "training"
+
+
+class TaskStatus(str, Enum):
+    """任务状态枚举"""
+    PENDING = "pending"
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ProgressUpdate(BaseModel):
+    """进度更新模型"""
+    task_id: str = Field(..., description="任务ID")
+    status: TaskStatus = Field(..., description="任务状态")
+    progress: float = Field(default=0.0, ge=0.0, le=100.0, description="进度百分比")
+    message: Optional[str] = Field(default=None, description="状态消息")
+    timestamp: datetime = Field(default_factory=datetime.now, description="时间戳")

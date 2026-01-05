@@ -1,13 +1,15 @@
 """Prediction API"""
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 from datetime import datetime
 from loguru import logger
 
 from database import MongoDB
-from main import manager
 from services.qlib_predictor import QlibPredictor
+from services.task_pool import get_task_pool_manager
+from config import settings
+from main import manager
 
 router = APIRouter(prefix="/api/predict", tags=["Predict"])
 
@@ -24,7 +26,7 @@ class LockRequest(BaseModel):
 
 async def execute_predict_task(task_id: str, predict_date: str, stocks: List[str]):
     """
-    后台执行预测任务
+    后台执行预测任务（已弃用，请使用进程池版本）
 
     Args:
         task_id: 任务ID
@@ -42,9 +44,9 @@ async def execute_predict_task(task_id: str, predict_date: str, stocks: List[str
         stocks_data = await MongoDB.get_stocks(enabled_only=True)
         stock_names_map: Dict[str, str] = {s["code"]: s["name"] for s in stocks_data}
 
-        # 创建 Qlib 预测器
+        # 创建 Qlib 预测器（使用配置中的路径）
         predictor = QlibPredictor(
-            provider_uri="~/.qlib/tencent_data/qlib_data",
+            provider_uri=settings.QLIB_PROVIDER_URI,
             experiment_name=f"prediction_{task_id}"
         )
 
@@ -89,7 +91,8 @@ async def execute_predict_task(task_id: str, predict_date: str, stocks: List[str
         })
 
         # 推送完成状态
-        await manager.broadcast_task_update(task_id, {
+        await manager.broadcast_task_update({
+            "task_id": task_id,
             "progress": 100,
             "status": "completed",
             "predicted_count": len(stocks)
@@ -107,7 +110,8 @@ async def execute_predict_task(task_id: str, predict_date: str, stocks: List[str
         })
 
         # 推送失败状态
-        await manager.broadcast_task_update(task_id, {
+        await manager.broadcast_task_update({
+            "task_id": task_id,
             "status": "failed",
             "error": str(e)
         })
@@ -115,7 +119,6 @@ async def execute_predict_task(task_id: str, predict_date: str, stocks: List[str
 
 @router.post("/")
 async def predict(
-    background_tasks: BackgroundTasks,
     predict_date: Optional[str] = Query(None, description="预测日期（默认: 今天）"),
     request_data: PredictRequest = None
 ):
@@ -132,6 +135,13 @@ async def predict(
     # 从请求体中提取股票列表
     stocks = request_data.stocks if request_data else None
     try:
+        # 获取任务池管理器
+        task_pool_manager = get_task_pool_manager()
+        
+        # 检查进程池是否已初始化
+        if not task_pool_manager.is_initialized():
+            raise HTTPException(status_code=500, detail="任务池未初始化，请检查服务启动")
+        
         if predict_date is None:
             predict_date = datetime.now().strftime("%Y-%m-%d")
         else:
@@ -159,10 +169,20 @@ async def predict(
             "updated_at": datetime.utcnow(),
         })
 
-        # 添加后台任务执行预测
-        background_tasks.add_task(execute_predict_task, task_id, predict_date, stocks)
+        # 提交任务到进程池
+        task_params = {
+            "task_type": "prediction",
+            "task_id": task_id,
+            "predict_date": predict_date,
+            "stocks": stocks
+        }
+        
+        success = task_pool_manager.submit_task(task_params)
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="提交任务到进程池失败")
 
-        logger.info(f"Prediction task created: {task_id}, background task scheduled")
+        logger.info(f"Prediction task created: {task_id}, submitted to process pool")
 
         return {
             "task_id": task_id,

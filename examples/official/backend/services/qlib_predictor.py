@@ -26,6 +26,15 @@ sys.path.insert(0, str(CUR_DIR))
 sys.path.insert(0, str(BACKEND_DIR))
 sys.path.insert(0, str(PROJECT_DIR))
 
+# 导入配置
+try:
+    from config import settings
+except ImportError:
+    logger.warning("Failed to import config, using default Qlib settings")
+    class Settings:
+        QLIB_PROVIDER_URI = os.path.expanduser("~/.qlib/qlib_data/cn_data")
+    settings = Settings()
+
 # 导入 Qlib 相关模块
 from loguru import logger
 import qlib
@@ -62,16 +71,20 @@ class QlibPredictor:
 
     def __init__(
         self,
-        provider_uri: str = "~/.qlib/tencent_data/qlib_data",
+        provider_uri: str = None,
         experiment_name: str = "stock_prediction_api"
     ):
         """
         初始化预测器
 
         Args:
-            provider_uri: Qlib 数据路径
+            provider_uri: Qlib 数据路径（默认使用 config.py 中的配置）
             experiment_name: 实验名称
         """
+        # 如果未指定 provider_uri，使用配置中的默认值
+        if provider_uri is None:
+            provider_uri = settings.QLIB_PROVIDER_URI
+        
         self.provider_uri = os.path.expanduser(provider_uri)
         self.experiment_name = experiment_name
         self._qlib_initialized = False
