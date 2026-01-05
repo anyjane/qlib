@@ -39,11 +39,11 @@ async def export_stocks(format: str = "csv"):
 
         # 处理空列表的情况
         if df.empty:
-            # 创建一个空的 DataFrame 包含正确的列
-            df = pd.DataFrame(columns=["code", "name", "enabled", "is_a500"])
+            # 创建一个空的 DataFrame 包含正确的列（只包含 code 和 name）
+            df = pd.DataFrame(columns=["code", "name"])
         else:
-            # 只选择需要的列
-            df = df[["code", "name", "enabled", "is_a500"]]
+            # 只选择需要的列（仅 code 和 name）
+            df = df[["code", "name"]]
 
         # 根据格式导出
         if format.lower() == "excel":
