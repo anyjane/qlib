@@ -96,21 +96,54 @@ async def import_stocks(file: UploadFile = File(...)):
         else:
             raise HTTPException(status_code=400, detail="不支持的文件格式，请上传 CSV 或 Excel 文件")
 
-        # 验证必需列
-        required_columns = {'code', 'name'}
-        if not required_columns.issubset(df.columns):
-            raise HTTPException(status_code=400, detail=f"缺少必需的列: {required_columns}")
+        # 验证必需列（支持多种列名格式）
+        # 优先匹配中文名称，避免匹配到英文名称
+        code_col = None
+        name_col = None
 
-        # 标准化股票代码格式
-        df['code'] = standardize_stock_codes(df['code'].tolist())
+        # 查找代码列
+        for col in df.columns:
+            col_lower = col.lower().strip()
+            if col_lower in ['code', '股票代码', 'stockcode', 'stock_code', '成份券代码', 'constituent code']:
+                code_col = col
+                break
+
+        # 查找名称列（优先中文名称）
+        # 1. 优先匹配常见的标准列名（英文）
+        for col in df.columns:
+            col_lower = col.lower().strip()
+            if col_lower in ['name', '股票名称']:
+                name_col = col
+                break
+
+        # 2. 如果没找到，匹配"成份券名称"（但排除英文名列）
+        if name_col is None:
+            for col in df.columns:
+                col_lower = col.lower().strip()
+                if '成份券名称' in col or 'constituent name' in col_lower:
+                    # 排除英文名称列
+                    if 'eng' not in col_lower and 'english' not in col_lower and '(eng)' not in col_lower:
+                        name_col = col
+                        break
+
+        if code_col is None or name_col is None:
+            logger.error(f"CSV columns: {df.columns.tolist()}")
+            logger.error(f"Found code_col: {code_col}, name_col: {name_col}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"CSV 格式不正确，无法找到代码或名称列。找到的列: {df.columns.tolist()}"
+            )
 
         # 导入数据
         imported = 0
         updated = 0
 
         for _, row in df.iterrows():
-            code = row['code']
-            name = row['name']
+            code = row[code_col]
+            name = row[name_col]
+
+            # 标准化代码格式
+            code = standardize_stock_codes([code])[0]
 
             # 检查是否已存在
             existing = await MongoDB.get_stock(code)
@@ -118,8 +151,8 @@ async def import_stocks(file: UploadFile = File(...)):
                 # 更新
                 await MongoDB.update_stock(code, {
                     "name": name,
-                    "enabled": row.get('enabled', True),
-                    "is_a500": row.get('is_a500', False),
+                    "enabled": row.get('enabled', True) if 'enabled' in row else True,
+                    "is_a500": row.get('is_a500', False) if 'is_a500' in row else False,
                     "updated_at": datetime.utcnow()
                 })
                 updated += 1
@@ -128,8 +161,8 @@ async def import_stocks(file: UploadFile = File(...)):
                 await MongoDB.insert_stock({
                     "code": code,
                     "name": name,
-                    "enabled": row.get('enabled', True),
-                    "is_a500": row.get('is_a500', False),
+                    "enabled": row.get('enabled', True) if 'enabled' in row else True,
+                    "is_a500": row.get('is_a500', False) if 'is_a500' in row else False,
                     "created_at": datetime.utcnow(),
                     "updated_at": datetime.utcnow()
                 })
@@ -165,8 +198,55 @@ async def initialize_stocks_from_csv():
 
         # 读取 A500.csv
         df = pd.read_csv(csv_path)
-        stock_codes = df['成份券代码Constituent Code'].tolist()
-        stock_names = df['成份券名称Constituent Name'].tolist()
+
+        # 检查列名是否存在（按优先级查找）
+        code_col = None
+        name_col = None
+
+        # 查找代码列
+        for col in df.columns:
+            col_lower = col.lower()
+            if '成份券代码' in col or 'constituent code' in col_lower:
+                code_col = col
+                break
+
+        # 查找名称列（优先中文名称，避免匹配到英文名称）
+        # 完全匹配优先：成份券名称Constituent Name
+        for col in df.columns:
+            if col == '成份券名称Constituent Name':
+                name_col = col
+                break
+
+        # 如果没有完全匹配，查找包含"成份券名称"的列
+        if name_col is None:
+            for col in df.columns:
+                col_lower = col.lower()
+                # 包含"成份券名称"但不包含"英文名"或"(eng)"
+                if '成份券名称' in col and 'eng' not in col_lower and 'english' not in col_lower:
+                    name_col = col
+                    break
+
+        # 如果还没找到，尝试其他列名
+        if name_col is None:
+            for col in df.columns:
+                col_lower = col.lower()
+                if 'constituent name' in col_lower and 'eng' not in col_lower:
+                    name_col = col
+                    break
+
+        if code_col is None or name_col is None:
+            logger.error(f"A500.csv columns: {df.columns.tolist()}")
+            logger.error(f"Found code_col: {code_col}, name_col: {name_col}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"A500.csv 格式不正确，无法找到股票代码或名称列。找到的列: {df.columns.tolist()}"
+            )
+
+        stock_codes = df[code_col].tolist()
+        stock_names = df[name_col].tolist()
+
+        logger.info(f"Found code column: {code_col}, name column: {name_col}")
+        logger.info(f"Sample data: code={stock_codes[0] if stock_codes else 'N/A'}, name={stock_names[0] if stock_names else 'N/A'}")
 
         # 标准化股票代码格式
         standardized_codes = standardize_stock_codes(stock_codes)
