@@ -1,7 +1,7 @@
 """Process pool manager for background task execution"""
 import logging
 from typing import Optional, Dict, Any
-from multiprocessing import Pool, cpu_count, Queue
+from multiprocessing import Pool, cpu_count, Manager
 import threading
 
 from .task_queue import TaskQueue, TaskDispatcher, ResultCollector
@@ -32,7 +32,7 @@ class TaskPoolManager:
     ):
         """
         初始化进程池管理器
-        
+
         Args:
             pool_size: 进程池大小，None 表示自动检测 CPU 核心数
             max_queue_size: 任务队列最大长度
@@ -41,26 +41,28 @@ class TaskPoolManager:
         # 避免重复初始化
         if hasattr(self, 'initialized') and self.initialized:
             return
-        
+
         self.pool_size = pool_size or cpu_count()
         self.max_queue_size = max_queue_size
         self.enable_progress_queue = enable_progress_queue
-        
+
         # 创建进程池
         self.pool: Optional[Pool] = None
-        
+        self.manager: Optional[Manager] = None
+
         # 创建任务队列
         self.task_queue = TaskQueue(maxsize=max_queue_size)
-        
+
         # 创建进度队列（如果启用）
-        self.progress_queue: Optional[Queue] = None
+        self.progress_queue: Optional[object] = None
         if enable_progress_queue:
-            self.progress_queue = Queue(maxsize=max_queue_size)
-        
+            self.manager = Manager()
+            self.progress_queue = self.manager.Queue(maxsize=max_queue_size)
+
         # 任务分发器和结果收集器
         self.dispatcher: Optional[TaskDispatcher] = None
         self.result_collector: Optional[ResultCollector] = None
-        
+
         self.initialized = False
         self.logger = logging.getLogger(__name__)
     
@@ -109,34 +111,37 @@ class TaskPoolManager:
         if not self.initialized:
             self.logger.warning("TaskPoolManager not started")
             return
-        
+
         try:
             self.logger.info("Stopping TaskPoolManager...")
-            
+
             # 停止任务分发器
             if self.dispatcher:
                 self.dispatcher.stop()
-            
+
             # 停止结果收集器
             if self.result_collector:
                 self.result_collector.stop()
-            
+
             # 关闭队列
             self.task_queue.close()
-            
+
             # 关闭进程池
             if self.pool:
                 self.pool.close()
                 self.pool.join()
                 self.logger.info("Process pool closed and joined")
-            
-            # 关闭进度队列
-            if self.progress_queue:
+
+            # 关闭进度队列和管理器
+            if self.manager:
                 self.progress_queue.close()
-            
+                self.progress_queue.join_thread()
+                self.manager.shutdown()
+                self.logger.info("Progress queue and manager shutdown")
+
             self.initialized = False
             self.logger.info("TaskPoolManager stopped successfully")
-            
+
         except Exception as e:
             self.logger.error(f"Error stopping TaskPoolManager: {e}")
     

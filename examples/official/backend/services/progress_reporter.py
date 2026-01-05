@@ -1,7 +1,10 @@
 """Progress reporter for task progress updates"""
 import logging
-from typing import Optional
-from multiprocessing import Queue
+from typing import Optional, TYPE_CHECKING
+
+# 为了避免循环导入和 multiprocessing 问题，使用 TYPE_CHECKING
+if TYPE_CHECKING:
+    from multiprocessing import Queue
 
 logger = logging.getLogger(__name__)
 
@@ -9,10 +12,10 @@ logger = logging.getLogger(__name__)
 class ProgressReporter:
     """进度上报器，用于在工作进程中上报任务进度"""
     
-    def __init__(self, task_id: str, progress_queue: Optional[Queue] = None):
+    def __init__(self, task_id: str, progress_queue: Optional['Queue'] = None):
         """
         初始化进度上报器
-        
+
         Args:
             task_id: 任务ID
             progress_queue: 进度队列（用于跨进程通信）
@@ -78,10 +81,10 @@ class ProgressReporter:
 class ProgressMonitor:
     """进度监控器，运行在主进程中，负责收集进度更新并更新到数据库"""
     
-    def __init__(self, progress_queue: Optional[Queue] = None):
+    def __init__(self, progress_queue: Optional['Queue'] = None):
         """
         初始化进度监控器
-        
+
         Args:
             progress_queue: 进度队列
         """
