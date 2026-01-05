@@ -9,8 +9,8 @@ from datetime import datetime
 # ============================================================================
 
 class StockCreate(BaseModel):
-    code: str = Field(..., description="股票代码，格式: sh600000")
-    name: str = Field(..., description="股票名称")
+    code: str = Field(..., min_length=1, description="股票代码，格式: sh600000")
+    name: str = Field(..., min_length=1, description="股票名称")
     is_a500: bool = Field(default=False, description="是否来自 A500")
 
 
@@ -26,14 +26,19 @@ class StockResponse(StockCreate):
     updated_at: datetime
 
 
+class StockBatchOperation(BaseModel):
+    """批量操作请求模型"""
+    codes: List[str] = Field(..., description="股票代码列表")
+
+
 # ============================================================================
 # Position Models
 # ============================================================================
 
 class PositionCreate(BaseModel):
-    code: str = Field(..., description="股票代码")
-    quantity: float = Field(..., description="持仓数量")
-    cost_price: float = Field(..., description="成本价")
+    code: str = Field(..., min_length=1, description="股票代码")
+    quantity: float = Field(..., ge=0, description="持仓数量")
+    cost_price: float = Field(..., ge=0, description="成本价")
     name: Optional[str] = Field(default="", description="股票名称")
 
 
@@ -49,6 +54,11 @@ class PositionResponse(PositionCreate):
     pnl_percent: float = Field(default=0.0, description="盈亏百分比")
     added_at: datetime
     updated_at: datetime
+
+
+class PositionBatchOperation(BaseModel):
+    """批量操作请求模型"""
+    codes: List[str] = Field(..., description="持仓代码列表")
 
 
 # ============================================================================
@@ -157,3 +167,12 @@ class TradeCandidatesItem(BaseModel):
 
 class TradeCandidates(BaseModel):
     items: List[TradeCandidatesItem]
+
+
+# ============================================================================
+# Log Models
+# ============================================================================
+
+class LogBatchDownload(BaseModel):
+    """批量下载日志请求模型"""
+    filenames: List[str] = Field(..., description="日志文件名列表")

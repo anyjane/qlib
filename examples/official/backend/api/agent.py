@@ -61,7 +61,7 @@ async def create_agent_config(config: AgentConfigCreate):
         创建的代理配置
     """
     try:
-        from ..services.agent_service import AgentService
+        from services.agent_service import AgentService
 
         result = await AgentService.create_agent_config(config)
 
@@ -85,7 +85,7 @@ async def update_agent_config(agent_id: str, config: AgentConfigCreate):
         操作结果
     """
     try:
-        from ..services.agent_service import AgentService
+        from services.agent_service import AgentService
 
         # 检查代理是否存在
         existing = await MongoDB.get_agent_config(agent_id)
@@ -141,7 +141,7 @@ async def set_primary_agent(agent_id: str):
         操作结果
     """
     try:
-        from ..services.agent_service import AgentService
+        from services.agent_service import AgentService
 
         result = await AgentService.set_primary_agent(agent_id)
 
@@ -161,7 +161,7 @@ async def get_primary_agent():
         主用代理配置，如果没有则返回 None
     """
     try:
-        from ..services.agent_service import AgentService
+        from services.agent_service import AgentService
 
         agent = await AgentService.get_primary_agent()
         return agent
@@ -179,7 +179,7 @@ async def get_agents_status():
         代理状态列表（包含是否可用、是否主用）
     """
     try:
-        from ..services.agent_service import AgentService
+        from services.agent_service import AgentService
 
         configs = await MongoDB.get_all_agent_configs()
 
@@ -211,7 +211,7 @@ async def get_agent_asset_info(agent_id: str):
         资产信息（账号ID、总资产、可用资金、持仓列表等）
     """
     try:
-        from ..services.agent_service import AgentService
+        from services.agent_service import AgentService
 
         asset_info = await AgentService.get_agent_asset_info(agent_id)
 
@@ -234,7 +234,7 @@ async def submit_agent_orders(action: str, stocks: List[dict]):
         订单提交结果
     """
     try:
-        from ..services.agent_service import AgentService
+        from services.agent_service import AgentService
 
         result = await AgentService.submit_orders(action, stocks)
 
@@ -259,7 +259,7 @@ async def get_agent_orders(order_id: str = None, limit: int = 100):
         订单列表
     """
     try:
-        from ..services.agent_service import AgentService
+        from services.agent_service import AgentService
 
         orders = await AgentService.get_agent_orders(order_id, limit)
 
@@ -281,7 +281,7 @@ async def get_agent_positions(agent_id: str):
         持仓列表
     """
     try:
-        from ..services.agent_service import AgentService
+        from services.agent_service import AgentService
 
         positions = await AgentService.get_agent_positions(agent_id)
 
@@ -303,7 +303,7 @@ async def heartbeat_agent(agent_id: str):
         心跳检测结果（是否可用）
     """
     try:
-        from ..services.agent_service import AgentService
+        from services.agent_service import AgentService
 
         result = await AgentService.heartbeat_agent(agent_id)
 

@@ -1,5 +1,5 @@
 """Stock management API with import/export features"""
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Body
 from fastapi.responses import StreamingResponse
 from typing import List
 from io import BytesIO
@@ -8,7 +8,7 @@ from datetime import datetime
 from loguru import logger
 
 from database import MongoDB
-from models import StockCreate, StockUpdate, StockResponse
+from models import StockCreate, StockUpdate, StockResponse, StockBatchOperation
 from services.data_service import standardize_stock_codes
 
 router = APIRouter(prefix="/api/stocks", tags=["Stocks"])
@@ -36,7 +36,14 @@ async def export_stocks(format: str = "csv"):
 
         # 转换为 DataFrame
         df = pd.DataFrame(stocks)
-        df = df[["code", "name", "enabled", "is_a500"]]
+
+        # 处理空列表的情况
+        if df.empty:
+            # 创建一个空的 DataFrame 包含正确的列
+            df = pd.DataFrame(columns=["code", "name", "enabled", "is_a500"])
+        else:
+            # 只选择需要的列
+            df = df[["code", "name", "enabled", "is_a500"]]
 
         # 根据格式导出
         if format.lower() == "excel":
@@ -271,7 +278,7 @@ async def enable_stock(code: str, enabled: bool):
 
 
 @router.post("/batch")
-async def batch_operations(operation: str, codes: List[str]):
+async def batch_operations(operation: str, codes: List[str] = Body(..., embed=True)):
     """
     批量操作（支持多选和连续多选）
 

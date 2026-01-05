@@ -15,6 +15,9 @@ from main import app
 from database import MongoDB
 from config import settings
 
+# 导入所有测试数据 fixtures
+from tests.fixtures.data_fixtures import *
+
 
 # ============================================================================
 # 异步事件循环
@@ -45,17 +48,20 @@ async def client():
 # MongoDB 测试数据库连接
 # ============================================================================
 
-@pytest.fixture(scope="function", autouse=True)
+@pytest.fixture(scope="session", autouse=True)
 async def setup_test_db():
     """
     设置测试数据库
-    每个测试函数执行前自动调用，执行后清理数据
+    在整个测试会话开始时设置，结束后清理
     """
-    # 连接到测试数据库
+    # 保存原始数据库名称
     original_db_name = settings.MONGODB_DB_NAME
     settings.MONGODB_DB_NAME = f"{original_db_name}_test"
 
     await MongoDB.connect_to_mongodb()
+
+    # 清理之前测试可能留下的数据
+    await cleanup_test_data()
 
     yield
 
@@ -69,9 +75,18 @@ async def setup_test_db():
     settings.MONGODB_DB_NAME = original_db_name
 
 
+@pytest.fixture(scope="function", autouse=True)
+async def cleanup_before_test():
+    """
+    在每个测试前清理数据
+    """
+    await cleanup_test_data()
+    yield
+
+
 async def cleanup_test_data():
     """清理测试数据库中的所有集合"""
-    if MongoDB.database:
+    if MongoDB.database is not None:
         collections = await MongoDB.database.list_collection_names()
         for collection in collections:
             await MongoDB.database[collection].delete_many({})

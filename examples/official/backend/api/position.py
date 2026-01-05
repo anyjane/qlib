@@ -1,11 +1,11 @@
 """Position management API with trading operations"""
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Body
 from typing import List, Optional
 from datetime import datetime
 from loguru import logger
 
 from database import MongoDB
-from models import PositionCreate, PositionUpdate
+from models import PositionCreate, PositionUpdate, PositionBatchOperation
 
 router = APIRouter(prefix="/api/positions", tags=["Positions"])
 
@@ -59,7 +59,7 @@ async def update_position(code: str, position: PositionUpdate):
         if stock:
             position.name = stock["name"]
 
-        update_dict = position.dict(exclude_unset=True)
+        update_dict = position.model_dump(exclude_unset=True)
         update_dict["updated_at"] = datetime.utcnow()
 
         if position.name is not None:
@@ -145,7 +145,7 @@ async def import_positions(file: UploadFile = File(...)):
 
 
 @router.post("/batch")
-async def batch_operations(operation: str, codes: List[str], update_data: dict = None):
+async def batch_operations(operation: str, codes: List[str] = Body(..., embed=True), update_data: dict = None):
     """
     批量操作（支持多选和连续多选）
 
@@ -184,7 +184,7 @@ async def sync_positions():
         同步结果统计
     """
     try:
-        from ..services.agent_service import AgentService
+        from services.agent_service import AgentService
 
         # 获取代理持仓
         primary_agent = await AgentService.get_primary_agent()

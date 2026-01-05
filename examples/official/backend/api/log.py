@@ -3,22 +3,27 @@ from fastapi import APIRouter, HTTPException
 from pathlib import Path
 from datetime import datetime
 from loguru import logger
+from config import settings
+from models import LogBatchDownload
 
 router = APIRouter(prefix="/api/logs", tags=["Logs"])
 
 
-LOG_DIR = Path("logs")
+def get_log_dir():
+    """获取日志目录（运行时动态获取）"""
+    return Path(settings.LOG_DIR)
 
 
 @router.get("/")
 async def list_logs():
     """列出所有日志文件"""
     try:
-        if not LOG_DIR.exists():
+        log_dir = get_log_dir()
+        if not log_dir.exists():
             return []
 
         log_files = []
-        for file in LOG_DIR.glob("*.log"):
+        for file in log_dir.glob("*.log"):
             stat = file.stat()
             log_files.append({
                 "filename": file.name,
@@ -40,7 +45,8 @@ async def download_log(filename: str):
     try:
         from fastapi.responses import FileResponse
 
-        log_path = LOG_DIR / filename
+        log_dir = get_log_dir()
+        log_path = log_dir / filename
         if not log_path.exists():
             raise HTTPException(status_code=404, detail="日志文件不存在")
 
@@ -56,17 +62,18 @@ async def download_log(filename: str):
 
 
 @router.post("/download/batch")
-async def download_logs_batch(filenames: list):
+async def download_logs_batch(request: LogBatchDownload):
     """批量下载日志（打包为 ZIP）"""
     try:
         from fastapi.responses import StreamingResponse
         import zipfile
         from io import BytesIO
 
+        log_dir = get_log_dir()
         zip_buffer = BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for filename in filenames:
-                log_path = LOG_DIR / filename
+            for filename in request.filenames:
+                log_path = log_dir / filename
                 if log_path.exists():
                     zipf.write(log_path, arcname=filename)
 

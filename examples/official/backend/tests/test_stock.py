@@ -130,13 +130,10 @@ async def test_import_stocks_csv_with_existing(client, populated_stocks_db, samp
 
 
 @pytest.mark.asyncio
-async def test_import_stocks_excel(client):
+async def test_import_stocks_excel(client, sample_excel_content):
     """测试导入股票列表 - Excel 格式"""
-    from tests.fixtures.data_fixtures import sample_excel_content
-
     api_client = APITestClient(client)
-    excel_content = await sample_excel_content()
-    files = {"file": ("test.xlsx", excel_content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
+    files = {"file": ("test.xlsx", sample_excel_content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
 
     response = await api_client.post("/api/stocks/import", files=files)
     assert_success_response(response, 200)

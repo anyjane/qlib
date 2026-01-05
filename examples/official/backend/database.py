@@ -61,12 +61,13 @@ class MongoDB:
         await cls.database.stocks.insert_one(stock_dict)
 
     @classmethod
-    async def update_stock(cls, code: str, update_dict: Dict):
+    async def update_stock(cls, code: str, update_dict: Dict) -> bool:
         """Update a stock"""
-        await cls.database.stocks.update_one(
+        result = await cls.database.stocks.update_one(
             {"code": code},
             {"$set": update_dict}
         )
+        return result.modified_count > 0
 
     @classmethod
     async def delete_stock(cls, code: str) -> bool:
@@ -130,12 +131,13 @@ class MongoDB:
         await cls.database.local_positions.insert_one(position_dict)
 
     @classmethod
-    async def update_position(cls, code: str, update_dict: Dict):
+    async def update_position(cls, code: str, update_dict: Dict) -> bool:
         """Update a position"""
-        await cls.database.local_positions.update_one(
+        result = await cls.database.local_positions.update_one(
             {"code": code},
             {"$set": update_dict}
         )
+        return result.modified_count > 0
 
     @classmethod
     async def delete_position(cls, code: str) -> bool:

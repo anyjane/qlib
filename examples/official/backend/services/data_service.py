@@ -45,6 +45,8 @@ class TencentDataService:
         - 上海股票（60开头，688开头）：sh600000
         - 深圳股票（00开头，30开头）：sz000001
 
+        如果已经是标准格式（sh或sz前缀），直接返回
+
         Args:
             codes: 原始股票代码列表
 
@@ -53,15 +55,23 @@ class TencentDataService:
         """
         standardized = []
         for code in codes:
-            code_str = str(code).zfill(6)  # 补零到6位
-            if code_str.startswith('6') or code_str.startswith('688'):
+            code_str = str(code).lower().strip()
+
+            # 如果已经是标准格式（sh开头或sz开头），直接使用
+            if code_str.startswith('sh') or code_str.startswith('sz'):
+                standardized.append(code_str)
+                continue
+
+            # 否则，按数字格式处理
+            code_num = code_str.zfill(6)  # 补零到6位
+            if code_num.startswith('6') or code_num.startswith('688'):
                 # 上海股票
-                standardized.append(f'sh{code_str}')
-            elif code_str.startswith('00') or code_str.startswith('30'):
+                standardized.append(f'sh{code_num}')
+            elif code_num.startswith('00') or code_num.startswith('30'):
                 # 深圳股票
-                standardized.append(f'sz{code_str}')
+                standardized.append(f'sz{code_num}')
             else:
-                logger.warning(f"Unknown stock code format: {code_str}")
+                logger.warning(f"Unknown stock code format: {code_num}")
         return standardized
 
     @staticmethod
