@@ -8,6 +8,9 @@ import pandas as pd
 from database import MongoDB
 from services.data_service import TencentDataService
 
+# 导入 WebSocket 管理器
+from main import manager
+
 router = APIRouter(prefix="/api/data", tags=["Data"])
 
 
@@ -27,21 +30,40 @@ async def execute_download_task(task_id: str, start_date: str, end_date: str, st
         # 更新任务状态为"运行中"
         await MongoDB.update_data_task(task_id, {"status": "running"})
 
-        # 执行下载
-        data_dict = await TencentDataService.download_from_tencent(stocks, start_date, end_date)
-
-        # 保存下载的数据到数据库或文件
-        # 这里简化处理，只记录成功数量
-        success_count = len(data_dict)
-        logger.info(f"[{task_id}] Downloaded data for {success_count}/{len(stocks)} stocks")
+        total_stocks = len(stocks)
+        # 逐个股票下载并推送进度
+        for idx, code in enumerate(stocks):
+            try:
+                # 下载单个股票
+                data_dict = await TencentDataService.download_from_tencent([code], start_date, end_date)
+                
+                # 推送进度
+                progress = int((idx + 1) / total_stocks * 100)
+                await manager.broadcast_task_update(task_id, {
+                    "progress": progress,
+                    "current_stock": code,
+                    "downloaded_count": idx + 1,
+                    "total_count": total_stocks,
+                    "status": "running"
+                })
+                logger.debug(f"[{task_id}] Downloaded {idx + 1}/{total_stocks}: {code}")
+            except Exception as e:
+                logger.error(f"[{task_id}] Failed to download {code}: {e}")
 
         # 更新任务状态为"完成"
         await MongoDB.update_data_task(task_id, {
             "status": "completed",
             "progress": 100,
-            "downloaded_count": success_count,
+            "downloaded_count": total_stocks,
             "error": None,
             "updated_at": datetime.utcnow()
+        })
+        
+        # 最终推送完成状态
+        await manager.broadcast_task_update(task_id, {
+            "progress": 100,
+            "status": "completed",
+            "downloaded_count": total_stocks
         })
 
         logger.info(f"[{task_id}] Download task completed successfully")
@@ -53,6 +75,12 @@ async def execute_download_task(task_id: str, start_date: str, end_date: str, st
             "status": "failed",
             "error": str(e),
             "updated_at": datetime.utcnow()
+        })
+        
+        # 推送失败状态
+        await manager.broadcast_task_update(task_id, {
+            "status": "failed",
+            "error": str(e)
         })
 
 
@@ -75,20 +103,40 @@ async def execute_update_task(task_id: str, stocks: List[str]):
         # 获取已有数据的最新日期，这里简化处理，使用最近30天
         start_date = (datetime.now() - pd.Timedelta(days=30)).strftime("%Y-%m-%d")
 
-        # 执行更新下载
-        data_dict = await TencentDataService.download_from_tencent(stocks, start_date, end_date)
-
-        # 记录更新数量
-        success_count = len(data_dict)
-        logger.info(f"[{task_id}] Updated data for {success_count}/{len(stocks)} stocks")
+        total_stocks = len(stocks)
+        # 逐个股票更新并推送进度
+        for idx, code in enumerate(stocks):
+            try:
+                # 更新单个股票
+                data_dict = await TencentDataService.download_from_tencent([code], start_date, end_date)
+                
+                # 推送进度
+                progress = int((idx + 1) / total_stocks * 100)
+                await manager.broadcast_task_update(task_id, {
+                    "progress": progress,
+                    "current_stock": code,
+                    "updated_count": idx + 1,
+                    "total_count": total_stocks,
+                    "status": "running"
+                })
+                logger.debug(f"[{task_id}] Updated {idx + 1}/{total_stocks}: {code}")
+            except Exception as e:
+                logger.error(f"[{task_id}] Failed to update {code}: {e}")
 
         # 更新任务状态为"完成"
         await MongoDB.update_data_task(task_id, {
             "status": "completed",
             "progress": 100,
-            "updated_count": success_count,
+            "updated_count": total_stocks,
             "error": None,
             "updated_at": datetime.utcnow()
+        })
+        
+        # 最终推送完成状态
+        await manager.broadcast_task_update(task_id, {
+            "progress": 100,
+            "status": "completed",
+            "updated_count": total_stocks
         })
 
         logger.info(f"[{task_id}] Update task completed successfully")
@@ -100,6 +148,12 @@ async def execute_update_task(task_id: str, stocks: List[str]):
             "status": "failed",
             "error": str(e),
             "updated_at": datetime.utcnow()
+        })
+        
+        # 推送失败状态
+        await manager.broadcast_task_update(task_id, {
+            "status": "failed",
+            "error": str(e)
         })
 
 
@@ -249,3 +303,52 @@ async def get_all_tasks():
     except Exception as e:
         logger.error(f"Failed to get all tasks: {e}")
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
+@router.get("/stocks/status")
+async def get_stocks_data_status():
+    """获取所有股票的数据状态（从 Qlib 读取）"""
+    try:
+        stocks = await MongoDB.get_stocks(enabled_only=True)
+        result = []
+        for stock in stocks:
+            data_info = await TencentDataService.get_stock_data_info(stock['code'])
+            result.append({
+                "code": stock['code'],
+                "name": stock['name'],
+                "enabled": stock['enabled'],
+                "has_data": data_info['has_data'],
+                "data_start_date": data_info.get('start_date'),
+                "data_end_date": data_info.get('end_date'),
+                "data_count": data_info.get('count', 0)
+            })
+        return result
+    except Exception as e:
+        logger.error(f"Failed to get stocks data status: {e}")
+        raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")
+
+
+@router.post("/delete")
+async def delete_stocks_data(stocks: List[str] = Body(...)):
+    """删除指定股票的数据（数据库 + Qlib 文件）"""
+    try:
+        results = []
+        for code in stocks:
+            try:
+                # 删除 Qlib 数据文件
+                await TencentDataService.delete_stock_data(code)
+                # 更新数据库状态
+                await MongoDB.update_stock(code, {
+                    "has_data": False,
+                    "data_start_date": None,
+                    "data_end_date": None
+                })
+                results.append({"code": code, "success": True})
+                logger.info(f"Deleted data for stock: {code}")
+            except Exception as e:
+                results.append({"code": code, "success": False, "error": str(e)})
+                logger.error(f"Failed to delete data for {code}: {e}")
+        return {"results": results}
+    except Exception as e:
+        logger.error(f"Failed to delete stocks data: {e}")
+        raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")

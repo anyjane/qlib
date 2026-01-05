@@ -130,3 +130,41 @@ class TencentDataService:
             except Exception as e:
                 logger.error(f"Failed to download {code}: {e}")
         return data_dict
+    
+    @staticmethod
+    async def get_stock_data_info(code: str) -> dict:
+        """从 Qlib 读取股票数据信息"""
+        import qlib
+        
+        try:
+            qlib.init(provider_uri=settings.QLIB_PROVIDER_URI, region=settings.QLIB_REGION)
+            
+            # 读取数据获取起止日期和数量
+            df = qlib.data.D.features([code], ["close"], start_time="2015-01-01")
+            
+            if not df.empty:
+                return {
+                    "has_data": True,
+                    "start_date": df.index.min().strftime("%Y-%m-%d"),
+                    "end_date": df.index.max().strftime("%Y-%m-%d"),
+                    "count": len(df)
+                }
+        except Exception as e:
+            logger.error(f"Failed to get data info for {code}: {e}")
+        
+        return {"has_data": False}
+    
+    @staticmethod
+    async def delete_stock_data(code: str):
+        """删除 Qlib 数据文件"""
+        import shutil
+        from pathlib import Path
+        
+        data_path = Path(settings.QLIB_PROVIDER_URI).expanduser()
+        instrument_path = data_path / "instruments" / code
+        
+        if instrument_path.exists():
+            shutil.rmtree(instrument_path)
+            logger.info(f"Deleted Qlib data for stock: {code}")
+        else:
+            logger.warning(f"Qlib data not found for stock: {code}")

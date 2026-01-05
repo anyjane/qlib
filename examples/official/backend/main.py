@@ -1,12 +1,59 @@
 """FastAPI application entry point"""
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from loguru import logger
 import sys
+from typing import Dict, Set
 
 from config import settings
 from database import MongoDB
+
+# ============================================================================
+# WebSocket Connection Manager
+# ============================================================================
+
+class ConnectionManager:
+    """WebSocket 连接管理器 - 用于实时推送任务状态"""
+    
+    def __init__(self):
+        self.active_connections: Dict[str, Set[WebSocket]] = {}
+    
+    async def connect(self, websocket: WebSocket, client_id: str):
+        """客户端连接"""
+        await websocket.accept()
+        if client_id not in self.active_connections:
+            self.active_connections[client_id] = set()
+        self.active_connections[client_id].add(websocket)
+        logger.info(f"WebSocket client connected: {client_id}")
+    
+    async def disconnect(self, websocket: WebSocket, client_id: str):
+        """客户端断开连接"""
+        if client_id in self.active_connections:
+            self.active_connections[client_id].discard(websocket)
+            logger.info(f"WebSocket client disconnected: {client_id}")
+    
+    async def broadcast_task_update(self, task_id: str, update_data: dict):
+        """广播任务更新到所有连接的客户端"""
+        disconnected = set()
+        for client_id, connections in self.active_connections.items():
+            for connection in connections:
+                try:
+                    await connection.send_json({
+                        "type": "task_update",
+                        "task_id": task_id,
+                        "data": update_data
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to send to client {client_id}: {e}")
+                    disconnected.add(connection)
+            # 清理断开的连接
+            if disconnected:
+                self.active_connections[client_id] -= disconnected
+        logger.debug(f"Broadcasted task update for {task_id}")
+
+# 创建全局 WebSocket 管理器
+manager = ConnectionManager()
 
 
 # Configure loguru
@@ -93,6 +140,26 @@ app.include_router(predict.router)
 app.include_router(position.router)
 app.include_router(agent.router)
 app.include_router(log.router)
+
+
+# ============================================================================
+# WebSocket Endpoint
+# ============================================================================
+
+@app.websocket("/ws/tasks/{client_id}")
+async def websocket_tasks(websocket: WebSocket, client_id: str):
+    """WebSocket 端点：实时推送任务状态更新"""
+    await manager.connect(websocket, client_id)
+    try:
+        # 保持连接，等待客户端消息
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        await manager.disconnect(websocket, client_id)
+        logger.info(f"WebSocket connection closed for client: {client_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error for client {client_id}: {e}")
+        await manager.disconnect(websocket, client_id)
 
 
 if __name__ == "__main__":
