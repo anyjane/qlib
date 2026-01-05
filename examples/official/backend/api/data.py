@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, Body, BackgroundTasks
 from typing import List, Optional
 from datetime import datetime
 from loguru import logger
+from pydantic import BaseModel
 import pandas as pd
 
 from database import MongoDB
@@ -12,6 +13,23 @@ from services.data_service import TencentDataService
 from main import manager
 
 router = APIRouter(prefix="/api/data", tags=["Data"])
+
+
+class StockListRequest(BaseModel):
+    """股票列表请求体"""
+    stocks: Optional[List[str]] = None
+
+
+class DownloadRequest(BaseModel):
+    """下载数据请求体"""
+    start_date: str = "2015-01-01"
+    end_date: Optional[str] = None
+    stocks: Optional[List[str]] = None
+
+
+class DeleteRequest(BaseModel):
+    """删除数据请求体"""
+    stocks: List[str]
 
 
 async def execute_download_task(task_id: str, start_date: str, end_date: str, stocks: List[str]):
@@ -172,22 +190,22 @@ async def get_latest_data_date():
 @router.post("/download")
 async def download_data(
     background_tasks: BackgroundTasks,
-    start_date: str = Body(default="2015-01-01"),
-    end_date: Optional[str] = Body(default=None),
-    stocks: Optional[List[str]] = Body(default=None)
+    request_data: DownloadRequest
 ):
     """
     下载数据
 
     Args:
         background_tasks: FastAPI BackgroundTasks
-        start_date: 开始日期（默认: 2015-01-01）
-        end_date: 结束日期（默认: 今天）
-        stocks: 指定股票代码列表（默认: 所有启用的股票）
+        request_data: 请求数据，包含日期范围和股票列表
 
     Returns:
         任务信息
     """
+    start_date = request_data.start_date
+    end_date = request_data.end_date
+    stocks = request_data.stocks
+
     try:
         # 验证日期格式
         try:
@@ -240,18 +258,20 @@ async def download_data(
 @router.post("/update")
 async def update_data(
     background_tasks: BackgroundTasks,
-    stocks: Optional[List[str]] = Body(default=None)
+    request_data: StockListRequest
 ):
     """
     增量更新数据
 
     Args:
         background_tasks: FastAPI BackgroundTasks
-        stocks: 指定股票代码列表（默认: 所有启用的股票）
+        request_data: 请求数据，包含股票列表
 
     Returns:
         任务信息
     """
+    stocks = request_data.stocks
+
     try:
         # 如果未指定股票，获取所有启用的股票
         if stocks is None:
@@ -329,8 +349,9 @@ async def get_stocks_data_status():
 
 
 @router.post("/delete")
-async def delete_stocks_data(stocks: List[str] = Body(...)):
+async def delete_stocks_data(request_data: DeleteRequest):
     """删除指定股票的数据（数据库 + Qlib 文件）"""
+    stocks = request_data.stocks
     try:
         results = []
         for code in stocks:

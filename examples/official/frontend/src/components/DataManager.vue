@@ -248,8 +248,8 @@ export default {
           cancelButtonText: '取消',
           type: 'warning'
         })
-        
-        await request.post('/api/data/delete', [code])
+
+        await request.post('/api/data/delete', { stocks: [code] })
         ElMessage.success('删除成功')
         loadStocksData()
       } catch (error) {
@@ -272,8 +272,8 @@ export default {
             type: 'warning'
           }
         )
-        
-        await request.post('/api/data/delete', codes)
+
+        await request.post('/api/data/delete', { stocks: codes })
         ElMessage.success('批量删除成功')
         handleClearSelection()
         loadStocksData()
