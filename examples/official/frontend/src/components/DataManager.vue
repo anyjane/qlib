@@ -98,21 +98,6 @@
 
     <!-- 任务监控面板 -->
     <TaskMonitor />
-
-    <!-- 日期选择对话框 -->
-    <el-dialog v-model="dateDialogVisible" title="选择日期范围" width="500px">
-      <el-date-picker
-        v-model="dateRange"
-        type="daterange"
-        start-placeholder="开始日期"
-        end-placeholder="结束日期"
-        style="width: 100%"
-      />
-      <template #footer>
-        <el-button @click="dateDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleConfirmDate">确定</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -134,10 +119,6 @@ export default {
     const stocks = ref([])
     const selectedStocks = ref([])
     const loading = ref(false)
-    const dateDialogVisible = ref(false)
-    const dateRange = ref(null)
-    const pendingAction = ref(null)
-    const pendingStocks = ref([])
 
     // 过滤后的股票列表
     const filteredStocks = computed(() => {
@@ -183,40 +164,28 @@ export default {
     }
 
     // 下载数据
-    const handleDownloadStock = (code) => {
-      pendingAction.value = 'download'
-      pendingStocks.value = [code]
-      dateDialogVisible.value = true
-    }
-
-    // 批量下载
-    const handleBatchDownload = () => {
-      pendingAction.value = 'download'
-      pendingStocks.value = selectedStocks.value.map(s => s.code)
-      dateDialogVisible.value = true
-    }
-
-    // 确认日期
-    const handleConfirmDate = async () => {
-      if (!dateRange.value) return
-      
-      const [start, end] = dateRange.value
-      const start_date = start.toISOString().split('T')[0]
-      const end_date = end.toISOString().split('T')[0]
-      
+    const handleDownloadStock = async (code) => {
       try {
         const result = await request.post('/api/data/download', {
-          start_date,
-          end_date,
-          stocks: pendingStocks.value
+          stocks: [code]
         })
-        
         ElMessage.success('下载任务已创建')
       } catch (error) {
         ElMessage.error('创建下载任务失败')
       }
-      
-      dateDialogVisible.value = false
+    }
+
+    // 批量下载
+    const handleBatchDownload = async () => {
+      const codes = selectedStocks.value.map(s => s.code)
+      try {
+        const result = await request.post('/api/data/download', {
+          stocks: codes
+        })
+        ElMessage.success('批量下载任务已创建')
+      } catch (error) {
+        ElMessage.error('创建批量下载任务失败')
+      }
     }
 
     // 增量更新
@@ -302,8 +271,6 @@ export default {
       stocks,
       selectedStocks,
       loading,
-      dateDialogVisible,
-      dateRange,
       filteredStocks,
       handleRefresh,
       handleSelectionChange,
@@ -314,7 +281,6 @@ export default {
       handleBatchDownload,
       handleBatchUpdate,
       handleBatchDelete,
-      handleConfirmDate,
       handleDeleteStock
     }
   }

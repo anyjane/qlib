@@ -42,6 +42,8 @@ async def execute_download_task(task_id: str, start_date: str, end_date: str, st
         end_date: 结束日期
         stocks: 股票代码列表
     """
+    all_data_dict = {}
+
     try:
         logger.info(f"[{task_id}] Starting download task: {start_date} to {end_date}, {len(stocks)} stocks")
 
@@ -54,7 +56,8 @@ async def execute_download_task(task_id: str, start_date: str, end_date: str, st
             try:
                 # 下载单个股票
                 data_dict = await TencentDataService.download_from_tencent([code], start_date, end_date)
-                
+                all_data_dict.update(data_dict)
+
                 # 推送进度
                 progress = int((idx + 1) / total_stocks * 100)
                 await manager.broadcast_task_update(task_id, {
@@ -68,6 +71,16 @@ async def execute_download_task(task_id: str, start_date: str, end_date: str, st
             except Exception as e:
                 logger.error(f"[{task_id}] Failed to download {code}: {e}")
 
+        # 所有下载完成后，将数据保存为 Qlib 格式
+        logger.info(f"[{task_id}] Download completed, saving to Qlib format...")
+        await manager.broadcast_task_update(task_id, {
+            "progress": 95,
+            "status": "saving",
+            "message": "正在保存数据到 Qlib 格式"
+        })
+
+        save_results = TencentDataService.save_data_to_qlib_format(all_data_dict, start_date, end_date)
+
         # 更新任务状态为"完成"
         await MongoDB.update_data_task(task_id, {
             "status": "completed",
@@ -76,12 +89,13 @@ async def execute_download_task(task_id: str, start_date: str, end_date: str, st
             "error": None,
             "updated_at": datetime.utcnow()
         })
-        
+
         # 最终推送完成状态
         await manager.broadcast_task_update(task_id, {
             "progress": 100,
             "status": "completed",
-            "downloaded_count": total_stocks
+            "downloaded_count": total_stocks,
+            "save_results": save_results
         })
 
         logger.info(f"[{task_id}] Download task completed successfully")
@@ -94,7 +108,7 @@ async def execute_download_task(task_id: str, start_date: str, end_date: str, st
             "error": str(e),
             "updated_at": datetime.utcnow()
         })
-        
+
         # 推送失败状态
         await manager.broadcast_task_update(task_id, {
             "status": "failed",
@@ -110,24 +124,45 @@ async def execute_update_task(task_id: str, stocks: List[str]):
         task_id: 任务ID
         stocks: 股票代码列表
     """
+    all_data_dict = {}
+
     try:
         logger.info(f"[{task_id}] Starting update task for {len(stocks)} stocks")
 
         # 更新任务状态为"运行中"
         await MongoDB.update_data_task(task_id, {"status": "running"})
 
-        # 获取最新数据日期
+        # 获取最新数据日期（当前日期）
         end_date = datetime.now().strftime("%Y-%m-%d")
-        # 获取已有数据的最新日期，这里简化处理，使用最近30天
-        start_date = (datetime.now() - pd.Timedelta(days=30)).strftime("%Y-%m-%d")
+
+        # 获取已有数据的最新日期，从该日期的下一天开始更新
+        # 默认使用最近 90 天（如果无法获取已有数据日期）
+        default_start_date = "2015-01-01"  # 使用固定的开始日期，避免问题
 
         total_stocks = len(stocks)
         # 逐个股票更新并推送进度
         for idx, code in enumerate(stocks):
             try:
+                # 获取该股票的已有数据结束日期
+                data_info = await TencentDataService.get_stock_data_info(code)
+                if data_info.get("has_data"):
+                    # 从已有数据的结束日期的下一天开始
+                    end_date_str = data_info.get("end_date")
+                    if end_date_str:
+                        end_date_ts = pd.Timestamp(end_date_str)
+                        start_date = (end_date_ts + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+                        logger.info(f"[{code}] 已有数据到 {end_date_str}，从 {start_date} 开始更新")
+                    else:
+                        start_date = default_start_date
+                else:
+                    # 没有数据，使用默认开始日期
+                    start_date = default_start_date
+                    logger.info(f"[{code}] 无已有数据，从 {start_date} 开始下载")
+
                 # 更新单个股票
                 data_dict = await TencentDataService.download_from_tencent([code], start_date, end_date)
-                
+                all_data_dict.update(data_dict)
+
                 # 推送进度
                 progress = int((idx + 1) / total_stocks * 100)
                 await manager.broadcast_task_update(task_id, {
@@ -141,6 +176,16 @@ async def execute_update_task(task_id: str, stocks: List[str]):
             except Exception as e:
                 logger.error(f"[{task_id}] Failed to update {code}: {e}")
 
+        # 所有更新完成后，将数据保存为 Qlib 格式
+        logger.info(f"[{task_id}] Update completed, saving to Qlib format...")
+        await manager.broadcast_task_update(task_id, {
+            "progress": 95,
+            "status": "saving",
+            "message": "正在保存数据到 Qlib 格式"
+        })
+
+        save_results = TencentDataService.save_data_to_qlib_format(all_data_dict, default_start_date, end_date)
+
         # 更新任务状态为"完成"
         await MongoDB.update_data_task(task_id, {
             "status": "completed",
@@ -149,12 +194,13 @@ async def execute_update_task(task_id: str, stocks: List[str]):
             "error": None,
             "updated_at": datetime.utcnow()
         })
-        
+
         # 最终推送完成状态
         await manager.broadcast_task_update(task_id, {
             "progress": 100,
             "status": "completed",
-            "updated_count": total_stocks
+            "updated_count": total_stocks,
+            "save_results": save_results
         })
 
         logger.info(f"[{task_id}] Update task completed successfully")
@@ -167,7 +213,7 @@ async def execute_update_task(task_id: str, stocks: List[str]):
             "error": str(e),
             "updated_at": datetime.utcnow()
         })
-        
+
         # 推送失败状态
         await manager.broadcast_task_update(task_id, {
             "status": "failed",
@@ -202,26 +248,13 @@ async def download_data(
     Returns:
         任务信息
     """
-    start_date = request_data.start_date
-    end_date = request_data.end_date
+    # 固定开始日期为 2015-01-01
+    start_date = "2015-01-01"
+    # 结束日期为当前日期
+    end_date = datetime.now().strftime("%Y-%m-%d")
     stocks = request_data.stocks
 
     try:
-        # 验证日期格式
-        try:
-            datetime.strptime(start_date, "%Y-%m-%d")
-        except ValueError:
-            raise HTTPException(status_code=400, detail="日期格式无效，请使用 YYYY-MM-DD 格式")
-
-        if end_date is not None:
-            try:
-                datetime.strptime(end_date, "%Y-%m-%d")
-            except ValueError:
-                raise HTTPException(status_code=400, detail="日期格式无效，请使用 YYYY-MM-DD 格式")
-
-        if end_date is None:
-            end_date = datetime.now().strftime("%Y-%m-%d")
-
         # 如果未指定股票，获取所有启用的股票
         if stocks is None:
             stocks_data = await MongoDB.get_stocks(enabled_only=True)
