@@ -1,9 +1,13 @@
 """Backtest API - 量化回测管理接口"""
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 from datetime import datetime
 from loguru import logger
+import io
+import csv
+import json
 
 from database import MongoDB
 from services.task_pool import get_task_pool_manager
@@ -258,3 +262,104 @@ async def get_available_markets():
             {"id": "csi500", "name": "中证500", "description": "中证500指数成分股"},
         ]
     }
+
+
+@router.get("/export/{task_id}")
+async def export_backtest_result(task_id: str, format: str = Query("csv", description="导出格式: csv 或 json")):
+    """
+    导出回测结果
+    
+    Args:
+        task_id: 任务ID
+        format: 导出格式 (csv/json)
+        
+    Returns:
+        文件下载流
+    """
+    try:
+        # 获取结果
+        results = await MongoDB.get_backtest_results(task_id)
+        if not results:
+            raise HTTPException(status_code=404, detail="未找到回测结果")
+            
+        task = await MongoDB.get_backtest_task(task_id)
+        
+        # 准备导出数据
+        trade_logs = results.get("trade_logs", [])
+        
+        if format == "json":
+            # JSON 导出
+            if task and task.get("config"):
+                results["config"] = task["config"]
+                
+            # 处理 ObjectId 和 datetime
+            def json_serial(obj):
+                if isinstance(obj, (datetime, datetime.date)):
+                    return obj.isoformat()
+                if hasattr(obj, '__str__'):
+                    return str(obj)
+                raise TypeError(f"Type {type(obj)} not serializable")
+                
+            json_str = json.dumps(results, default=json_serial, ensure_ascii=False, indent=2)
+            
+            return StreamingResponse(
+                io.StringIO(json_str),
+                media_type="application/json",
+                headers={"Content-Disposition": f"attachment; filename=backtest_result_{task_id}.json"}
+            )
+            
+        elif format == "csv":
+            # CSV 导出 (主要导出交易记录)
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # 写入表头
+            writer.writerow(["日期", "代码", "操作", "数量", "价格", "金额", "费用", "说明"])
+            
+            for log in trade_logs:
+                date = log.get("trade_date")
+                
+                # 买入记录
+                for buy in log.get("buys", []):
+                    writer.writerow([
+                        date,
+                        buy.get("code"),
+                        "买入",
+                        buy.get("amount"),
+                        f"{buy.get('price', 0):.2f}",
+                        f"{buy.get('value', 0):.2f}",
+                        f"{buy.get('commission', 0):.2f}",
+                        "Predict Score: N/A" # 暂无详细分
+                    ])
+                    
+                # 卖出记录
+                for sell in log.get("sells", []):
+                    writer.writerow([
+                        date,
+                        sell.get("code"),
+                        "卖出",
+                        sell.get("amount"),
+                        f"{sell.get('price', 0):.2f}",
+                        f"{sell.get('value', 0):.2f}",
+                        f"{sell.get('commission', 0):.2f}",
+                        f"Actual: {sell.get('actual_received', 0):.2f}"
+                    ])
+                    
+            output.seek(0)
+            
+            return StreamingResponse(
+                iter([output.getvalue()]),
+                media_type="text/csv",
+                headers={"Content-Disposition": f"attachment; filename=backtest_result_{task_id}.csv"}
+            )
+            
+        else:
+            raise HTTPException(status_code=400, detail="不支持的导出格式")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to export backtest result: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")

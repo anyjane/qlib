@@ -86,6 +86,29 @@
             </div>
           </el-col>
         </el-row>
+
+        <el-row :gutter="20" class="summary-row">
+          <el-col :span="8">
+            <div class="summary-item">
+              <div class="item-label">年化收益率</div>
+              <div class="item-value" :class="{ 'profit-positive': (backtestResult.annualReturn || 0) > 0, 'profit-negative': (backtestResult.annualReturn || 0) < 0 }">
+                {{ ((backtestResult.annualReturn || 0) * 100).toFixed(2) }}%
+              </div>
+            </div>
+          </el-col>
+          <el-col :span="8">
+            <div class="summary-item">
+              <div class="item-label">夏普比率</div>
+              <div class="item-value">{{ (backtestResult.sharpeRatio || 0).toFixed(2) }}</div>
+            </div>
+          </el-col>
+          <el-col :span="8">
+            <div class="summary-item">
+              <div class="item-label">最大回撤</div>
+              <div class="item-value profit-negative">{{ ((backtestResult.maxDrawdown || 0) * 100).toFixed(2) }}%</div>
+            </div>
+          </el-col>
+        </el-row>
       </div>
       
       <!-- 回测参数配置 -->
@@ -432,6 +455,11 @@ const loadBacktestResult = async () => {
       finalCapital: resultData.metrics.final_capital,
       totalTrades: resultData.metrics.total_trades,
       totalCommission: resultData.metrics.total_commission,
+      
+      // Additional metrics from backend
+      annualReturn: resultData.metrics.annual_return_with_cost,
+      sharpeRatio: resultData.metrics.sharpe_ratio_with_cost,
+      maxDrawdown: resultData.metrics.max_drawdown_with_cost,
       
       // 映射交易日志
       trades: (resultData.trade_logs || []).map(log => ({

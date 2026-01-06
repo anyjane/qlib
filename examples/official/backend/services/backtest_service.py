@@ -99,7 +99,6 @@ class BacktestService:
         data_handler_config = {
             "start_time": train_start,
             "end_time": test_end,
-            "fit_start_time": train_start,
             "fit_end_time": train_end,
             "instruments": market if market != "all" else None,
         }
@@ -282,10 +281,12 @@ class BacktestService:
         logger.info("=" * 80)
         logger.info("BACKTEST COMPLETED")
         logger.info("=" * 80)
-        logger.info(f"Annual Return (no cost): {results.get('annual_return_no_cost', 'N/A')}")
-        logger.info(f"Sharpe Ratio (no cost): {results.get('sharpe_ratio_no_cost', 'N/A')}")
-        logger.info(f"Annual Return (with cost): {results.get('annual_return_with_cost', 'N/A')}")
-        logger.info(f"Sharpe Ratio (with cost): {results.get('sharpe_ratio_with_cost', 'N/A')}")
+        
+        metrics = results.get("metrics", {})
+        logger.info(f"Annual Return (no cost): {metrics.get('annual_return_no_cost', 'N/A')}")
+        logger.info(f"Sharpe Ratio (no cost): {metrics.get('sharpe_ratio_no_cost', 'N/A')}")
+        logger.info(f"Annual Return (with cost): {metrics.get('annual_return_with_cost', 'N/A')}")
+        logger.info(f"Sharpe Ratio (with cost): {metrics.get('sharpe_ratio_with_cost', 'N/A')}")
         logger.info("=" * 80)
         
         return results
@@ -420,34 +421,51 @@ class BacktestService:
                             for code, score in sorted_preds.items():
                                 top_predictions.append({
                                     "code": code,
-                                    "prediction_score": float(score)
+                                    "prediction_score": float(score)  # Ensure python float
                                 })
                 except Exception as e:
                     logger.warning(f"Failed to get predictions for {date}: {e}")
 
-                # 推断交易 (对比昨日持仓)
+                # 获取当日价格数据 (用于估算成交价)
+                prices = {}
+                try:
+                    # 使用 Qlib 数据接口获取当日收盘价
+                    # 注意: extract_results 是静态方法，且要在 recorder 上下文中
+                    # 这里尝试使用 D.features 获取价格，字段为 $close
+                    # 需确保 imported D
+                    from qlib.data import D
+                    # query for this date only
+                    price_df = D.features(
+                        instruments=list(set(list(prev_positions.keys()) + list(current_stock_positions.keys()))),
+                        fields=["$close"],
+                        start_time=date_str,
+                        end_time=date_str
+                    )
+                    if not price_df.empty:
+                        # price_df index is (instrument, datetime)
+                        for (instrument, _), row in price_df.iterrows():
+                            prices[instrument] = float(row["$close"])  # Ensure python float
+                except Exception as e:
+                    logger.warning(f"Failed to fetch prices for {date_str}: {e}")
+
+                # 初始化交易列表
                 buys = []
                 sells = []
-                
+
                 # 检查卖出 (昨日有，今日无 或 减少)
                 for code, prev_amount in prev_positions.items():
                     curr_amount = current_stock_positions.get(code, 0)
                     if curr_amount < prev_amount:
                         amount_diff = prev_amount - curr_amount
-                        # 估算价格 (使用当日 close，这里简化处理，实际可能有差异)
-                        # 如果无法获取当日价格，可能需要额外加载数据
-                        # 这里暂时用 0 或从 pred_df 中获取不到价格
-                        # 更好的方式是使用 TransactionRecord 但 Qlib 默认没有详细 txn log
-                        # 作为近似，我们假设价格 = value change / amount change (不准确)
-                        # 或者我们不显示具体价格，只显示变动
+                        estimated_price = prices.get(code, 0.0)
                         
                         sells.append({
                             "code": code,
                             "amount": amount_diff,
-                            "price": 0.0, # 暂时无法获取准确成交价
-                            "value": 0.0,
-                            "commission": 0.0, 
-                            "actual_received": 0.0
+                            "price": estimated_price,
+                            "value": amount_diff * estimated_price,
+                            "commission": 0.0, # 简化的手续费计算
+                            "actual_received": amount_diff * estimated_price  # 简化的实际到账
                         })
                         total_trades += 1
                 
@@ -456,11 +474,13 @@ class BacktestService:
                     prev_amount = prev_positions.get(code, 0)
                     if curr_amount > prev_amount:
                         amount_diff = curr_amount - prev_amount
+                        estimated_price = prices.get(code, 0.0)
+                        
                         buys.append({
                             "code": code,
                             "amount": amount_diff,
-                            "price": 0.0,
-                            "value": 0.0,
+                            "price": estimated_price,
+                            "value": amount_diff * estimated_price,
                             "commission": 0.0
                         })
                         total_trades += 1
