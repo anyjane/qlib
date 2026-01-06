@@ -261,7 +261,7 @@
         </el-row>
         
         <!-- TopkDropoutWithReallocation 特有参数 -->
-        <div v-if="form.strategyType === 'topk_dropout_with_reallocation'">
+        <div v-if="form.strategyType === 'topk_reallocation'">
           <el-row :gutter="20">
             <el-col :span="12">
               <el-form-item label="资金再分配" prop="strategy.maxReallocationRounds">
@@ -448,17 +448,27 @@ const handleSubmit = async () => {
   try {
     // 构建回测配置对象
     const backtestConfig = {
-      initialCapital: form.initialCapital,
+      initial_capital: form.initialCapital,
       market: form.market,
-      trainStart: form.trainStart,
-      trainEnd: form.trainEnd,
-      testStart: form.testStart,
-      testEnd: form.testEnd,
-      buyCommission: form.buyCommission,
-      sellCommission: form.sellCommission,
-      minCommission: form.minCommission,
-      strategyType: form.strategyType,
-      strategyParams: form.strategy
+      train_start: form.trainStart,
+      train_end: form.trainEnd,
+      test_start: form.testStart,
+      test_end: form.testEnd,
+      buy_rate: form.buyCommission,
+      sell_rate: form.sellCommission,
+      min_commission: form.minCommission,
+      strategy_type: form.strategyType,
+      topk: form.strategy.topk,
+      n_drop: form.strategy.nDrop,
+      hold_thresh: form.strategy.holdThresh,
+      method_sell: form.strategy.methodSell,
+      method_buy: form.strategy.methodBuy,
+      only_tradable: form.strategy.onlyTradable,
+      forbid_all_trade_at_limit: form.strategy.forbidAllTradeAtLimit,
+      // TopkReallocation specific
+      max_reallocation_rounds: form.strategy.maxReallocationRounds,
+      log_prediction_details: form.strategy.logPredictionDetails,
+      verbose: form.strategy.verbose
     }
     
     const result = await submitBacktest(backtestConfig)

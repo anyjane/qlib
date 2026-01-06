@@ -115,7 +115,7 @@
               <el-descriptions-item label="详细日志">{{ backtestResult.config.strategyParams.verbose ? '启用' : '禁用' }}</el-descriptions-item>
             </el-descriptions>
             
-            <div v-if="backtestResult.config.strategyType === 'topk_dropout_with_reallocation'">
+            <div v-if="backtestResult.config.strategyType === 'topk_reallocation'">
               <el-descriptions :column="2" border>
                 <el-descriptions-item label="最大再分配轮数">{{ backtestResult.config.strategyParams.maxReallocationRounds }}</el-descriptions-item>
                 <el-descriptions-item label="预测详情">{{ backtestResult.config.strategyParams.logPredictionDetails ? '启用' : '禁用' }}</el-descriptions-item>
@@ -398,16 +398,83 @@ const loadBacktestResult = async () => {
   try {
     loading.value = true
     
-    // 获取基本信息
+    // 获取完整结果 (包含配置、指标、交易明细)
     const resultData = await getBacktestResult(taskId)
     
-    // 获取交易明细
-    const tradesData = await getBacktestTrades(taskId)
-    
+    // 映射后端数据结构 (snake_case -> camelCase & flatten)
     backtestResult.value = {
-      ...resultData,
-      trades: tradesData
+      backtestDate: resultData.backtest_date,
+      // 映射配置
+      config: {
+        initialCapital: resultData.config.initial_capital,
+        market: resultData.config.market,
+        trainStart: resultData.config.train_start,
+        trainEnd: resultData.config.train_end,
+        testStart: resultData.config.test_start,
+        testEnd: resultData.config.test_end,
+        buyCommission: resultData.config.buy_rate,
+        sellCommission: resultData.config.sell_rate,
+        minCommission: resultData.config.min_commission,
+        strategyType: resultData.config.strategy_type,
+        strategyParams: {
+          topk: resultData.config.topk,
+          nDrop: resultData.config.n_drop,
+          holdThresh: resultData.config.hold_thresh,
+          methodSell: resultData.config.method_sell,
+          methodBuy: resultData.config.method_buy,
+          onlyTradable: resultData.config.only_tradable,
+          verbose: resultData.config.verbose,
+          maxReallocationRounds: resultData.config.max_reallocation_rounds,
+          logPredictionDetails: resultData.config.log_prediction_details
+        }
+      },
+      // 映射指标
+      finalCapital: resultData.metrics.final_capital,
+      totalTrades: resultData.metrics.total_trades,
+      totalCommission: resultData.metrics.total_commission,
+      
+      // 映射交易日志
+      trades: (resultData.trade_logs || []).map(log => ({
+        tradeDate: log.trade_date,
+        startCapital: log.cash_before, // Daily logic might differ, mapping cash_before for now
+        endCapital: log.total_value, // Using total_value as end capital state
+        
+        // Top Predictions
+        topPredictions: (log.top_stocks || []).map(s => ({
+          code: s.code,
+          score: s.prediction_score
+        })),
+        
+        // Holdings
+        holdings: (log.current_positions || []).map(p => ({
+          code: p.code,
+          score: p.prediction_score,
+          amount: p.amount
+        })),
+        
+        // Buys
+        buyTrades: (log.buys || []).map(b => ({
+          code: b.code,
+          quantity: b.amount,
+          price: b.price,
+          value: b.value,
+          fee: b.commission
+        })),
+        
+        // Sells
+        sellTrades: (log.sells || []).map(s => ({
+          code: s.code,
+          quantity: s.amount,
+          price: s.price,
+          value: s.value,
+          fee: s.commission,
+          actualAmount: s.actual_received
+        }))
+      }))
     }
+    
+    // 设置 trades 引用供 debugging 或其他用途
+    trades.value = backtestResult.value.trades
     
     ElMessage.success('回测结果加载成功')
   } catch (error) {
@@ -454,7 +521,7 @@ const getProfitClass = (final, initial) => {
 const formatStrategyName = (type) => {
   const nameMap = {
     'topk_dropout': 'TopkDropout',
-    'topk_dropout_with_reallocation': 'TopkDropoutWithReallocation'
+    'topk_reallocation': 'TopkDropoutWithReallocation'
   }
   return nameMap[type] || type
 }

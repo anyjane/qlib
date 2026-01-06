@@ -10,7 +10,7 @@ import request from '../utils/request'
  * @returns {Promise<Object>} 回测任务ID
  */
 export function submitBacktest(config) {
-  return request.post('/api/backtest/execute', config)
+  return request.post('/api/backtest/', config)
 }
 
 /**
@@ -19,26 +19,25 @@ export function submitBacktest(config) {
  * @returns {Promise<Object>} 任务状态
  */
 export function getBacktestStatus(taskId) {
-  return request.get(`/api/backtest/status/${taskId}`)
+  return request.get(`/api/backtest/tasks/${taskId}`)
 }
 
 /**
- * 获取回测结果
+ * 获取回测结果 (包含配置、指标、交易明细)
  * @param {String} taskId - 任务ID
  * @returns {Promise<Object>} 回测结果
  */
 export function getBacktestResult(taskId) {
-  return request.get(`/api/backtest/result/${taskId}`)
+  return request.get(`/api/backtest/tasks/${taskId}/results`)
 }
 
 /**
- * 获取回测交易明细
- * @param {String} taskId - 任务ID
- * @param {Object} params - 查询参数（页码、每页数量等）
- * @returns {Promise<Object>} 交易明细列表
+ * 获取回测交易明细 (已包含在结果中，为了兼容暂保留，返回部分数据)
+ * 注意：建议直接使用 getBacktestResult
  */
 export function getBacktestTrades(taskId, params = {}) {
-  return request.get(`/api/backtest/trades/${taskId}`, { params })
+  // 由于后端 unified 返回，这里只是为了兼容旧代码，实际应该在组件中处理
+  return getBacktestResult(taskId).then(res => res.trade_logs || [])
 }
 
 /**

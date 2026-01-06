@@ -169,11 +169,10 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '../utils/request'
 
-const router = useRouter()
-
 export default {
   name: 'BacktestManager',
   setup() {
+    const router = useRouter()
     const tasks = ref([])
     const markets = ref([])
     const loading = ref(false)
@@ -225,14 +224,8 @@ export default {
       }
     }
 
-    const viewResults = async (task) => {
-      try {
-        const data = await request.get(`/api/backtest/tasks/${task.id}/results`)
-        currentResults.value = data
-        showResultDialog.value = true
-      } catch (error) {
-        ElMessage.error('获取回测结果失败')
-      }
+    const viewResults = (task) => {
+      router.push({ path: '/backtest/result', query: { taskId: task.id } })
     }
 
     const deleteTask = async (task) => {

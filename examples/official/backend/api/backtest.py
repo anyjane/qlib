@@ -12,23 +12,16 @@ from config import settings
 router = APIRouter(prefix="/api/backtest", tags=["Backtest"])
 
 
-class BacktestRequest(BaseModel):
-    """回测请求体"""
-    market: str = "all"  # all, csi300, csi500, 或自定义
-    train_start: str = "2020-01-01"
-    train_end: str = "2024-12-31"
-    test_start: str = "2025-01-01"
-    test_end: str = "2025-12-31"
-    experiment_name: Optional[str] = None
+from backtest.type_defs import BacktestConfig
 
 
 @router.post("/")
-async def create_backtest(request: BacktestRequest):
+async def create_backtest(config: BacktestConfig):
     """
     创建回测任务
     
     Args:
-        request: 回测配置
+        config: 回测配置
         
     Returns:
         任务信息
@@ -44,20 +37,13 @@ async def create_backtest(request: BacktestRequest):
         task_id = f"backtest_{datetime.now().strftime('%Y%m%d')}_{datetime.now().timestamp()}"
         
         # 实验名称
-        experiment_name = request.experiment_name or f"backtest_{request.market}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        experiment_name = f"backtest_{config.market}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         # 保存任务到数据库
         task_doc = {
             "task_id": task_id,
             "status": "pending",
-            "config": {
-                "market": request.market,
-                "train_start": request.train_start,
-                "train_end": request.train_end,
-                "test_start": request.test_start,
-                "test_end": request.test_end,
-                "experiment_name": experiment_name,
-            },
+            "config": config.dict(),
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
         }
@@ -67,13 +53,9 @@ async def create_backtest(request: BacktestRequest):
         task_params = {
             "task_type": "backtest",
             "task_id": task_id,
-            "market": request.market,
-            "train_start": request.train_start,
-            "train_end": request.train_end,
-            "test_start": request.test_start,
-            "test_end": request.test_end,
             "experiment_name": experiment_name,
             "provider_uri": settings.QLIB_PROVIDER_URI,
+            "config_json": config.json()
         }
         
         success = task_pool_manager.submit_task(task_params)
