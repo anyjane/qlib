@@ -39,6 +39,16 @@ const routes = [
     path: '/backtest',
     name: 'BacktestManager',
     component: () => import('./components/BacktestManager.vue')
+  },
+  {
+    path: '/backtest/config',
+    name: 'BacktestConfig',
+    component: () => import('./components/BacktestConfigForm.vue')
+  },
+  {
+    path: '/backtest/result',
+    name: 'BacktestResult',
+    component: () => import('./components/BacktestResult.vue')
   }
 ]
 

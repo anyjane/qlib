@@ -122,7 +122,7 @@ async def health_check():
 # API Routers
 # ============================================================================
 
-from api import stock, data, predict, position, agent, log, backtest
+from api import stock, data, predict, position, agent, log, backtest, backtest_enhanced
 
 app.include_router(stock.router)
 app.include_router(data.router)
@@ -131,6 +131,7 @@ app.include_router(position.router)
 app.include_router(agent.router)
 app.include_router(log.router)
 app.include_router(backtest.router)
+app.include_router(backtest_enhanced.router)
 
 
 # ============================================================================

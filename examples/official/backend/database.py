@@ -100,6 +100,68 @@ class MongoDB:
         return result.deleted_count
 
     # ============================================================================
+    # Backtest Task Collection Operations
+    # ============================================================================
+
+    @classmethod
+    async def insert_backtest_task(cls, task_dict: Dict):
+        """Insert a backtest task"""
+        await cls.database.backtest_tasks.insert_one(task_dict)
+        logger.info(f"Inserted backtest task: {task_dict.get('task_id')}")
+
+    @classmethod
+    async def get_backtest_tasks(cls, limit: int = 50) -> List[Dict]:
+        """Get backtest tasks"""
+        cursor = cls.database.backtest_tasks.find().sort("created_at", -1).limit(limit)
+        tasks = await cursor.to_list(length=None)
+        return tasks
+
+    @classmethod
+    async def get_backtest_task(cls, task_id: str) -> Optional[Dict]:
+        """Get backtest task by ID"""
+        task = await cls.database.backtest_tasks.find_one({"task_id": task_id})
+        return task
+
+    @classmethod
+    async def delete_backtest_task(cls, task_id: str) -> int:
+        """Delete a backtest task"""
+        result = await cls.database.backtest_tasks.delete_one({"task_id": task_id})
+        return result.deleted_count
+
+    # ============================================================================
+    # Backtest Result Collection Operations
+    # ============================================================================
+
+    @classmethod
+    async def insert_backtest_result(cls, result_dict: Dict):
+        """Insert a backtest result"""
+        await cls.database.backtest_results.insert_one(result_dict)
+        logger.info(f"Inserted backtest result: {result_dict.get('task_id')}")
+
+    @classmethod
+    async def get_backtest_result(cls, task_id: str) -> Optional[Dict]:
+        """Get backtest result by ID"""
+        result = await cls.database.backtest_results.find_one({"task_id": task_id}, {"_id": 0})
+        return result
+
+    @classmethod
+    async def get_all_backtest_results(cls, limit: int = 20, market: Optional[str] = None) -> List[Dict]:
+        """Get all backtest results"""
+        query = {}
+        if market:
+            query["config.market"] = market
+
+        cursor = cls.database.backtest_results.find(query, {"_id": 0}).sort("created_at", -1).limit(limit)
+        results = await cursor.to_list(length=None)
+        return results
+
+    @classmethod
+    async def delete_backtest_result(cls, task_id: str) -> int:
+        """Delete a backtest result"""
+        result = await cls.database.backtest_results.delete_one({"task_id": task_id})
+        return result.deleted_count
+
+    # ============================================================================
     # Position Collection Operations
     # ============================================================================
 

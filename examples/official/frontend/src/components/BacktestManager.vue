@@ -3,9 +3,14 @@
     <el-card shadow="hover">
       <div class="header">
         <h2>量化回测</h2>
-        <el-button type="primary" icon="el-icon-video-play" @click="showConfigDialog = true">
-          创建回测
-        </el-button>
+        <el-button-group>
+          <el-button type="primary" icon="el-icon-video-play" @click="showConfigDialog = true">
+            创建回测
+          </el-button>
+          <el-button type="success" icon="el-icon-setting" @click="goToConfig">
+            参数配置
+          </el-button>
+        </el-button-group>
       </div>
 
       <el-divider></el-divider>
@@ -160,8 +165,11 @@
 
 <script>
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '../utils/request'
+
+const router = useRouter()
 
 export default {
   name: 'BacktestManager',
@@ -240,6 +248,10 @@ export default {
       }
     }
 
+    const goToConfig = () => {
+      router.push('/backtest/config')
+    }
+
     const getStatusType = (status) => {
       const types = {
         pending: 'info',
@@ -292,6 +304,7 @@ export default {
       createBacktest,
       viewResults,
       deleteTask,
+      goToConfig,
       getStatusType,
       getStatusText,
       getValueClass,
