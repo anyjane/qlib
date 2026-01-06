@@ -231,10 +231,16 @@ class TencentDataService:
                     # 构造请求参数
                     # start 为空表示从最早开始，腾讯 API 会返回最多 count 条数据
                     # 格式: {symbol},{interval},{start},{end},{count},{qfq}
-                    param = f"{code},day,,{end_date_str},2000,qfq"
+                    # 注意：腾讯 API 的 end 参数是"不包含"该日期的，所以首次请求不指定 end 以获取最新数据
+                    if fetch_count == 1:
+                        # 首次请求不指定 end，让 API 返回最新数据
+                        param = f"{code},day,,,2000,qfq"
+                    else:
+                        # 分页请求时指定 end 为最旧日期的前一天
+                        param = f"{code},day,,{end_date_str},2000,qfq"
                     url = f"{TencentDataService.BASE_URL}?param={param}"
 
-                    logger.debug(f"[{code}] 第 {fetch_count} 次请求，参数: start=空, end={end_date_str}, count=2000")
+                    logger.debug(f"[{code}] 第 {fetch_count} 次请求，{url}")
 
                     response = requests.get(
                         url,
