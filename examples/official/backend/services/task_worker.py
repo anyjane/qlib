@@ -427,14 +427,11 @@ def execute_backtest_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
         )
         
         # 保存结果到数据库
+        # 保存结果到数据库
         results_doc = {
             "task_id": task_id,
-            "annual_return_no_cost": results.get("annual_return_no_cost"),
-            "sharpe_ratio_no_cost": results.get("sharpe_ratio_no_cost"),
-            "max_drawdown_no_cost": results.get("max_drawdown_no_cost"),
-            "annual_return_with_cost": results.get("annual_return_with_cost"),
-            "sharpe_ratio_with_cost": results.get("sharpe_ratio_with_cost"),
-            "max_drawdown_with_cost": results.get("max_drawdown_with_cost"),
+            "metrics": results.get("metrics", {}),
+            "trade_logs": results.get("trade_logs", []),
             "created_at": datetime.now(),
         }
         db.backtest_results.insert_one(results_doc)

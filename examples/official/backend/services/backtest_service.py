@@ -293,7 +293,7 @@ class BacktestService:
     @staticmethod
     def extract_results(recorder) -> Dict:
         """
-        从 recorder 中提取回测结果
+        从 recorder 中提取回测结果 (包含详细交易记录)
         
         Args:
             recorder: Qlib recorder
@@ -301,28 +301,222 @@ class BacktestService:
         Returns:
             结果字典
         """
-        results = {}
+        results = {"metrics": {}, "trade_logs": []}
         
         try:
-            # 加载组合分析结果
+            # 1. 加载组合分析结果 (Metrics)
             port_analysis = recorder.load_object("portfolio_analysis/port_analysis_1day.pkl")
             
             # 提取无成本超额收益指标
             excess_no_cost = port_analysis.loc["excess_return_without_cost", "risk"]
-            results["annual_return_no_cost"] = float(excess_no_cost.loc["annualized_return"])
-            results["sharpe_ratio_no_cost"] = float(excess_no_cost.loc["information_ratio"])
-            results["max_drawdown_no_cost"] = float(excess_no_cost.loc["max_drawdown"])
+            results["metrics"]["annual_return_no_cost"] = float(excess_no_cost.loc["annualized_return"])
+            results["metrics"]["sharpe_ratio_no_cost"] = float(excess_no_cost.loc["information_ratio"])
+            results["metrics"]["max_drawdown_no_cost"] = float(excess_no_cost.loc["max_drawdown"])
             
             # 提取有成本超额收益指标
             excess_with_cost = port_analysis.loc["excess_return_with_cost", "risk"]
-            results["annual_return_with_cost"] = float(excess_with_cost.loc["annualized_return"])
-            results["sharpe_ratio_with_cost"] = float(excess_with_cost.loc["information_ratio"])
-            results["max_drawdown_with_cost"] = float(excess_with_cost.loc["max_drawdown"])
+            results["metrics"]["annual_return_with_cost"] = float(excess_with_cost.loc["annualized_return"])
+            results["metrics"]["sharpe_ratio_with_cost"] = float(excess_with_cost.loc["information_ratio"])
+            results["metrics"]["max_drawdown_with_cost"] = float(excess_with_cost.loc["max_drawdown"])
             
-            logger.info("Results extracted successfully")
+            # 2. 加载详细报告和持仓 (Trade Logs)
+            report_df = recorder.load_object("portfolio_analysis/report_normal_1day.pkl")
+            positions_dict = recorder.load_object("portfolio_analysis/positions_normal_1day.pkl")
+            pred_df = recorder.load_object("pred.pkl")
+            
+            # 确保 pred_df 索引正确 (datetime, instrument)
+            if not isinstance(pred_df.index, pd.MultiIndex):
+                # 尝试修复索引，如果可能
+                pass
+
+            # 初始化变量
+            trade_logs = []
+            prev_positions = {}
+            total_trades = 0
+            total_commission = 0.0
+            
+            # 遍历每一个交易日
+            for date in report_df.index:
+                date_str = date.strftime("%Y-%m-%d")
+                
+                # 获取当日账户信息
+                account_info = report_df.loc[date]
+                total_value = float(account_info["account"])
+                cash = float(account_info["cash"]) if "cash" in account_info else 0.0
+                # report_df 通常包含: account, return, turnover, cost, risk
+                # Qlib 的 report_normal_1day.pkl 结构可能只有 account, return, turnover, cost, risk
+                # cash 需要通过 account - market_value 计算，或者从 positions 中获取 cash
+                
+                # 获取当日持仓
+                current_positions = positions_dict.get(date, {})
+                # positions_dict values can be Qlib Position objects or dicts
+                
+                current_cash = 0.0
+                current_stock_positions = {}
+                
+                if hasattr(current_positions, "position") and isinstance(current_positions.position, dict):
+                    # It's likely a Qlib Position object with a .position dict
+                    raw_pos = current_positions.position
+                    current_cash = raw_pos.get("cash", 0.0)
+                    
+                    # Robustly extract stock positions
+                    current_stock_positions = {}
+                    for k, v in raw_pos.items():
+                        if k == "cash": 
+                            continue
+                        if isinstance(v, (int, float)):
+                            if v > 0:
+                                current_stock_positions[k] = v
+                        elif isinstance(v, dict) and "amount" in v:
+                            # Handle nested position info if present
+                            amt = v.get("amount", 0)
+                            if isinstance(amt, (int, float)) and amt > 0:
+                                current_stock_positions[k] = amt
+                        else:
+                            # logging unexpected types for debugging but avoiding crash
+                            # logger.warning(f"Unexpected position value for {k}: {type(v)}")
+                            pass
+
+                elif isinstance(current_positions, dict):
+                    # It's a plain dictionary
+                    current_cash = current_positions.get("cash", 0.0)
+                    
+                    current_stock_positions = {}
+                    for k, v in current_positions.items():
+                        if k == "cash":
+                            continue
+                        if isinstance(v, (int, float)) and v > 0:
+                            current_stock_positions[k] = v
+                else:
+                    # Try accessing standard Qlib Position methods if .position is not available/public
+                    # But typically .position is accessible or we might need inspect
+                    try:
+                        # Fallback: check if we can convert to dict
+                        raw_pos = dict(current_positions)
+                        current_cash = raw_pos.get("cash", 0.0)
+                        
+                        current_stock_positions = {}
+                        for k, v in raw_pos.items():
+                            if k == "cash":
+                                continue
+                            if isinstance(v, (int, float)) and v > 0:
+                                current_stock_positions[k] = v
+                    except:
+                        logger.warning(f"Unknown position format for date {date}: {type(current_positions)}")
+                        continue
+                
+                # 获取当日预测分 (Top predictions)
+                top_predictions = []
+                try:
+                    if isinstance(pred_df.index, pd.MultiIndex):
+                        if date in pred_df.index.get_level_values(0):
+                            daily_preds = pred_df.loc[date]
+                            # daily_preds 是 Series 或 DataFrame
+                            if isinstance(daily_preds, pd.DataFrame):
+                                daily_preds = daily_preds.iloc[:, 0]
+                            
+                            # 排序并取 Top 20
+                            sorted_preds = daily_preds.sort_values(ascending=False).head(20)
+                            for code, score in sorted_preds.items():
+                                top_predictions.append({
+                                    "code": code,
+                                    "prediction_score": float(score)
+                                })
+                except Exception as e:
+                    logger.warning(f"Failed to get predictions for {date}: {e}")
+
+                # 推断交易 (对比昨日持仓)
+                buys = []
+                sells = []
+                
+                # 检查卖出 (昨日有，今日无 或 减少)
+                for code, prev_amount in prev_positions.items():
+                    curr_amount = current_stock_positions.get(code, 0)
+                    if curr_amount < prev_amount:
+                        amount_diff = prev_amount - curr_amount
+                        # 估算价格 (使用当日 close，这里简化处理，实际可能有差异)
+                        # 如果无法获取当日价格，可能需要额外加载数据
+                        # 这里暂时用 0 或从 pred_df 中获取不到价格
+                        # 更好的方式是使用 TransactionRecord 但 Qlib 默认没有详细 txn log
+                        # 作为近似，我们假设价格 = value change / amount change (不准确)
+                        # 或者我们不显示具体价格，只显示变动
+                        
+                        sells.append({
+                            "code": code,
+                            "amount": amount_diff,
+                            "price": 0.0, # 暂时无法获取准确成交价
+                            "value": 0.0,
+                            "commission": 0.0, 
+                            "actual_received": 0.0
+                        })
+                        total_trades += 1
+                
+                # 检查买入 (今日有，昨日无 或 增加)
+                for code, curr_amount in current_stock_positions.items():
+                    prev_amount = prev_positions.get(code, 0)
+                    if curr_amount > prev_amount:
+                        amount_diff = curr_amount - prev_amount
+                        buys.append({
+                            "code": code,
+                            "amount": amount_diff,
+                            "price": 0.0,
+                            "value": 0.0,
+                            "commission": 0.0
+                        })
+                        total_trades += 1
+                
+                # 构建持仓列表 (带预测分)
+                holdings_list = []
+                for code, amount in current_stock_positions.items():
+                    score = 0.0
+                    # 尝试查找分数
+                    for p in top_predictions:
+                        if p["code"] == code:
+                            score = p["prediction_score"]
+                            break
+                    
+                    holdings_list.append({
+                        "code": code,
+                        "amount": amount,
+                        "prediction_score": score
+                    })
+
+                # 记录日志
+                trade_log = {
+                    "trade_date": date_str,
+                    "cash_before": 0.0, # 难以获取期初现金，暂略
+                    "total_value": total_value,
+                    "top_stocks": top_predictions,
+                    "current_positions": holdings_list,
+                    "buys": buys,
+                    "sells": sells
+                }
+                trade_logs.append(trade_log)
+                
+                # 更新昨日持仓
+                prev_positions = current_stock_positions.copy()
+            
+            results["trade_logs"] = trade_logs
+            
+            # 补充 Metrics
+            if trade_logs:
+                last_log = trade_logs[-1]
+                results["metrics"]["final_capital"] = last_log["total_value"]
+            else:
+                results["metrics"]["final_capital"] = 0.0
+                
+            results["metrics"]["total_trades"] = total_trades
+            results["metrics"]["total_commission"] = total_commission # 需要更精确的计算
+            
+            logger.info(f"Results extracted successfully with {len(trade_logs)} trade logs")
             
         except Exception as e:
             logger.error(f"Failed to extract results: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             results["error"] = str(e)
+            # 确保至少有基本结构
+            if "metrics" not in results: results["metrics"] = {}
+            if "trade_logs" not in results: results["trade_logs"] = []
         
         return results
