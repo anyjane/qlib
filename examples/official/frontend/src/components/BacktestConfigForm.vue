@@ -316,9 +316,9 @@
           type="primary"
           size="large"
           :loading="submitting"
-          @click="handleSubmit"
+          @click="saveConfig"
         >
-          {{ submitting ? '回测执行中...' : '开始回测' }}
+          {{ submitting ? '保存中...' : '保存并更新参数' }}
         </el-button>
         <el-button
           size="large"
@@ -334,7 +334,8 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { submitBacktest } from '../api/backtest'
+import { useRouter } from 'vue-router'
+import { submitBacktest, getBacktestConfig, saveBacktestConfig } from '../api/backtest'
 import {
   DEFAULT_BACKTEST_CONFIG,
   MARKET_OPTIONS,
@@ -362,9 +363,61 @@ const marketOptions = MARKET_OPTIONS
 const strategyOptions = STRATEGY_OPTIONS
 const methodOptions = METHOD_OPTIONS
 
+const router = useRouter()
 // 提交状态
 const submitting = ref(false)
 const configFormRef = ref(null)
+
+// 加载配置
+const loadConfig = async () => {
+  try {
+    const savedConfig = await getBacktestConfig()
+    if (savedConfig && Object.keys(savedConfig).length > 0) {
+      // 映射 snake_case 到 camelCase (如果后端存的是 snake_case)
+      // 但这里我们存的时候是 snake_case，所以回显时需要反向映射或者统一格式
+      // 假设我们存的是 snake_case (即 backtestConfig 对象)，我们需要转换回 form 结构
+      // 或者更简单：我们修改 saveBacktestConfig 存的是 form 结构 (camelCase)
+      // 让我们看看 saveConfig 怎么写的。
+      // 下面的 saveConfig 会构造 snake_case 对象。为了方便前端回显，
+      // 我们其实应该存 frontend-friendly config (camelCase) 或者做好 mapping
+      // 为简单起见，我修改 saveConfig 存 camelCase 的 form 对象，这样回显最容易
+      // 且后端只是当做 JSON 存，不校验内部结构？ 
+      // 不，后端 validation 需要 snake_case.
+      // 所以我们必须做 mapping.
+      
+      form.initialCapital = savedConfig.initial_capital || form.initialCapital
+      form.market = savedConfig.market || form.market
+      form.trainStart = savedConfig.train_start || form.trainStart
+      form.trainEnd = savedConfig.train_end || form.trainEnd
+      form.testStart = savedConfig.test_start || form.testStart
+      form.testEnd = savedConfig.test_end || form.testEnd
+      form.buyCommission = savedConfig.buy_rate!==undefined ? savedConfig.buy_rate : form.buyCommission
+      form.sellCommission = savedConfig.sell_rate!==undefined ? savedConfig.sell_rate : form.sellCommission
+      form.minCommission = savedConfig.min_commission!==undefined ? savedConfig.min_commission : form.minCommission
+      form.strategyType = savedConfig.strategy_type || form.strategyType
+      
+      // Strategy params
+      form.strategy.topk = savedConfig.topk || form.strategy.topk
+      form.strategy.nDrop = savedConfig.n_drop || form.strategy.nDrop
+      form.strategy.holdThresh = savedConfig.hold_thresh || form.strategy.holdThresh
+      form.strategy.methodSell = savedConfig.method_sell || form.strategy.methodSell
+      form.strategy.methodBuy = savedConfig.method_buy || form.strategy.methodBuy
+      form.strategy.onlyTradable = savedConfig.only_tradable!==undefined ? savedConfig.only_tradable : form.strategy.onlyTradable
+      form.strategy.forbidAllTradeAtLimit = savedConfig.forbid_all_trade_at_limit!==undefined ? savedConfig.forbid_all_trade_at_limit : form.strategy.forbidAllTradeAtLimit
+      form.strategy.maxReallocationRounds = savedConfig.max_reallocation_rounds!==undefined ? savedConfig.max_reallocation_rounds : form.strategy.maxReallocationRounds
+      form.strategy.logPredictionDetails = savedConfig.log_prediction_details!==undefined ? savedConfig.log_prediction_details : form.strategy.logPredictionDetails
+      form.strategy.verbose = savedConfig.verbose!==undefined ? savedConfig.verbose : form.strategy.verbose
+      
+      ElMessage.success('已加载保存的配置')
+    }
+  } catch (error) {
+    console.error('加载配置失败', error)
+  }
+}
+
+onMounted(() => {
+  loadConfig()
+})
 
 // 表单校验规则
 const rules = {
@@ -432,8 +485,8 @@ const handleStrategyChange = (value) => {
   console.log('策略类型变化:', value)
 }
 
-// 提交回测
-const handleSubmit = async () => {
+// 保存配置
+const saveConfig = async () => {
   if (!configFormRef.value) return
   
   try {
@@ -446,7 +499,7 @@ const handleSubmit = async () => {
   submitting.value = true
   
   try {
-    // 构建回测配置对象
+    // 构建回测配置对象 (snake_case for backend)
     const backtestConfig = {
       initial_capital: form.initialCapital,
       market: form.market,
@@ -471,19 +524,15 @@ const handleSubmit = async () => {
       verbose: form.strategy.verbose
     }
     
-    const result = await submitBacktest(backtestConfig)
+    await saveBacktestConfig(backtestConfig)
+    ElMessage.success('配置已保存')
     
-    if (result.success) {
-      ElMessage.success('回测任务已提交，正在执行中...')
-      
-      // 跳转到结果页面
-      window.location.href = `/backtest/result?taskId=${result.data.taskId}`
-    } else {
-      ElMessage.error(result.message || '回测任务提交失败')
-    }
+    // 可选：保存后留在这里，或者返回
+    // 根据用户习惯，可能是保存并返回
+    // 但按钮叫 "保存并更新参数"
   } catch (error) {
-    console.error('提交回测失败:', error)
-    ElMessage.error('提交失败，请稍后重试')
+    console.error('保存配置失败:', error)
+    ElMessage.error('保存失败，请稍后重试')
   } finally {
     submitting.value = false
   }
@@ -496,7 +545,7 @@ const handleCancel = () => {
     cancelButtonText: '取消',
     type: 'warning'
   }).then(() => {
-    window.location.href = '/backtest'
+    router.push('/backtest')
   }).catch(() => {})
 }
 </script>

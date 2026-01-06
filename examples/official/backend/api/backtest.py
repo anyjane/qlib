@@ -163,6 +163,10 @@ async def get_backtest_results(task_id: str):
             else:
                 return {"message": "暂无结果"}
         
+        # 将任务配置合并到结果中
+        if task.get("config"):
+            results["config"] = task["config"]
+            
         return results
     except HTTPException:
         raise
@@ -202,6 +206,41 @@ async def delete_backtest_task(task_id: str):
     except Exception as e:
         logger.error(f"Failed to delete backtest task: {e}")
         raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
+
+
+@router.get("/config/default")
+async def get_default_config():
+    """
+    获取默认回测配置
+    
+    Returns:
+        回测配置
+    """
+    try:
+        config = await MongoDB.get_default_backtest_config()
+        return config if config else {}
+    except Exception as e:
+        logger.error(f"Failed to get default backtest config: {e}")
+        raise HTTPException(status_code=500, detail=f"获取配置失败: {str(e)}")
+
+
+@router.put("/config/default")
+async def save_default_config(config: BacktestConfig):
+    """
+    保存默认回测配置
+    
+    Args:
+        config: 回测配置
+        
+    Returns:
+        保存结果
+    """
+    try:
+        await MongoDB.save_default_backtest_config(config.dict())
+        return {"message": "配置已保存"}
+    except Exception as e:
+        logger.error(f"Failed to save default backtest config: {e}")
+        raise HTTPException(status_code=500, detail=f"保存配置失败: {str(e)}")
 
 
 @router.get("/markets")

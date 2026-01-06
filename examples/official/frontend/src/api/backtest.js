@@ -61,3 +61,20 @@ export function exportBacktestResult(taskId, format = 'csv') {
     responseType: 'blob'
   })
 }
+
+/**
+ * 获取默认回测配置
+ * @returns {Promise<Object>} 回测配置
+ */
+export function getBacktestConfig() {
+  return request.get('/api/backtest/config/default')
+}
+
+/**
+ * 保存默认回测配置
+ * @param {Object} config - 回测配置
+ * @returns {Promise<Object>} 保存结果
+ */
+export function saveBacktestConfig(config) {
+  return request.put('/api/backtest/config/default', config)
+}

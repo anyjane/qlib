@@ -463,7 +463,22 @@ class MongoDB:
         result = await cls.database.backtest_results.find_one({"task_id": task_id}, {"_id": 0})
         return result
 
+    # ============================================================================
+    # Backtest Config Collection Operations
+    # ============================================================================
+
     @classmethod
-    async def insert_backtest_results(cls, results_dict: Dict):
-        """Insert backtest results"""
-        await cls.database.backtest_results.insert_one(results_dict)
+    async def get_default_backtest_config(cls) -> Optional[Dict]:
+        """Get default backtest config"""
+        config = await cls.database.backtest_configs.find_one({"type": "default"}, {"_id": 0})
+        return config.get("config") if config else None
+
+    @classmethod
+    async def save_default_backtest_config(cls, config: Dict):
+        """Save default backtest config"""
+        await cls.database.backtest_configs.update_one(
+            {"type": "default"},
+            {"$set": {"config": config, "updated_at": datetime.utcnow()}},
+            upsert=True
+        )
+        logger.info("Saved default backtest config")

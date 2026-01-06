@@ -4,8 +4,8 @@
       <div class="header">
         <h2>量化回测</h2>
         <el-button-group>
-          <el-button type="primary" icon="el-icon-video-play" @click="showConfigDialog = true">
-            创建回测
+          <el-button type="primary" icon="el-icon-video-play" @click="createBacktest" :loading="creating">
+            启动回测
           </el-button>
           <el-button type="success" icon="el-icon-setting" @click="goToConfig">
             参数配置
@@ -211,14 +211,28 @@ export default {
     }
 
     const createBacktest = async () => {
-      creating.value = true
       try {
-        await request.post('/api/backtest/', config.value)
-        ElMessage.success('回测任务已创建')
+        await ElMessageBox.confirm('确定要使用当前保存的参数启动回测吗？', '启动回测')
+        
+        // 1. 获取默认配置
+        const savedConfig = await request.get('/api/backtest/config/default')
+        if (!savedConfig || Object.keys(savedConfig).length === 0) {
+          ElMessage.warning('未找到回测配置，请先进行参数配置')
+          router.push('/backtest/config')
+          return
+        }
+
+        // 2. 启动回测
+        creating.value = true
+        await request.post('/api/backtest/', savedConfig)
+        ElMessage.success('回测任务已启动')
         showConfigDialog.value = false
         await loadTasks()
       } catch (error) {
-        ElMessage.error('创建回测任务失败')
+        if (error !== 'cancel') {
+          console.error(error)
+          ElMessage.error('启动回测失败')
+        }
       } finally {
         creating.value = false
       }
