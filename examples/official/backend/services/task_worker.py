@@ -399,9 +399,10 @@ def execute_backtest_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
     test_end = task_params.get("test_end", "2025-12-31")
     experiment_name = task_params.get("experiment_name", f"backtest_{task_id}")
     provider_uri = task_params.get("provider_uri", settings.QLIB_PROVIDER_URI)
+    initial_capital = int(task_params.get("initial_capital", 100000000))
 
     logger.info(f"Executing backtest task {task_id}")
-    logger.info(f"Market: {market}, Train: {train_start} ~ {train_end}, Test: {test_start} ~ {test_end}")
+    logger.info(f"Market: {market}, Train: {train_start} ~ {train_end}, Test: {test_start} ~ {test_end}, Capital: {initial_capital}")
 
     try:
         from services.backtest_service import BacktestService
@@ -424,6 +425,7 @@ def execute_backtest_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
             test_start=test_start,
             test_end=test_end,
             experiment_name=experiment_name,
+            initial_capital=initial_capital,
         )
         
         # 保存结果到数据库

@@ -70,6 +70,7 @@ class BacktestService:
         train_end: str,
         test_start: str,
         test_end: str,
+        initial_capital: int = 100000000,
     ) -> Dict:
         """
         创建工作流配置
@@ -81,11 +82,12 @@ class BacktestService:
             train_end: 训练结束日期
             test_start: 测试开始日期
             test_end: 测试结束日期
+            initial_capital: 初始资金
             
         Returns:
             工作流配置字典
         """
-        logger.info(f"Creating workflow config: market={market}")
+        logger.info(f"Creating workflow config: market={market}, capital={initial_capital}")
         
         # 市场对应的基准指数
         benchmark_map = {
@@ -138,6 +140,7 @@ class BacktestService:
         port_analysis_config["backtest"]["start_time"] = test_start
         port_analysis_config["backtest"]["end_time"] = test_end
         port_analysis_config["backtest"]["benchmark"] = benchmark
+        port_analysis_config["backtest"]["account"] = initial_capital
         
         # 记录配置
         record_config = [
@@ -190,6 +193,7 @@ class BacktestService:
         test_start: str,
         test_end: str,
         experiment_name: str,
+        initial_capital: int = 100000000,
     ) -> Dict:
         """
         执行回测
@@ -202,6 +206,7 @@ class BacktestService:
             test_start: 测试开始日期
             test_end: 测试结束日期
             experiment_name: 实验名称
+            initial_capital: 初始资金
             
         Returns:
             回测结果字典
@@ -211,6 +216,7 @@ class BacktestService:
         logger.info("=" * 80)
         logger.info(f"Provider URI: {provider_uri}")
         logger.info(f"Market: {market}")
+        logger.info(f"Capital: {initial_capital}")
         logger.info(f"Train period: {train_start} to {train_end}")
         logger.info(f"Test period: {test_start} to {test_end}")
         logger.info(f"Experiment: {experiment_name}")
@@ -229,6 +235,7 @@ class BacktestService:
             train_end=train_end,
             test_start=test_start,
             test_end=test_end,
+            initial_capital=initial_capital,
         )
         
         # 创建模型
@@ -363,7 +370,7 @@ class BacktestService:
                     # Robustly extract stock positions
                     current_stock_positions = {}
                     for k, v in raw_pos.items():
-                        if k == "cash": 
+                        if k == "cash" or k == "now_account_value": 
                             continue
                         if isinstance(v, (int, float)):
                             if v > 0:

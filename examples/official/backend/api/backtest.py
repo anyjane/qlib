@@ -59,7 +59,8 @@ async def create_backtest(config: BacktestConfig):
             "task_id": task_id,
             "experiment_name": experiment_name,
             "provider_uri": settings.QLIB_PROVIDER_URI,
-            "config_json": config.json()
+            "config_json": config.json(),
+            "initial_capital": int(config.initial_capital * 10000) # Convert 万 to 元
         }
         
         success = task_pool_manager.submit_task(task_params)
