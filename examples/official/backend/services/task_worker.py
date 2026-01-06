@@ -188,47 +188,61 @@ def execute_data_update_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
 
         # 更新任务默认获取最近 90 天的数据
         end_date = datetime.now().strftime("%Y-%m-%d")
-        start_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+        default_start_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
 
         # 标准化股票代码
         standardized_stocks = TencentDataService.standardize_stock_codes(stocks)
-        
+
         # 定义单个股票下载函数
         def download_single_stock(code: str) -> tuple:
-            """下载单个股票数据，返回 (code, result_dict)"""
+            """下载单个股票数据，返回 (code, result_dict, stock_start_date)"""
             try:
+                # 获取该股票已有的数据信息
+                stock_info = TencentDataService.get_stock_data_info(code)
+
+                # 如果有数据，从最后一个交易日开始下载以覆盖该日数据
+                if stock_info.get("has_data") and stock_info.get("end_date"):
+                    stock_start_date = stock_info["end_date"]
+                    logger.info(f"[{code}] 已有数据，从最后一个交易日 {stock_start_date} 开始更新（覆盖该日）")
+                else:
+                    stock_start_date = default_start_date
+                    logger.info(f"[{code}] 无已有数据，从默认日期 {stock_start_date} 开始下载")
+
                 result = TencentDataService.download_from_tencent(
                     stocks=[code],
-                    start=start_date,
+                    start=stock_start_date,
                     end=end_date
                 )
-                return (code, result.get(code, {"count": 0}))
+                return (code, result.get(code, {"count": 0}), stock_start_date)
             except Exception as e:
                 logger.error(f"Failed to update {code}: {e}")
-                return (code, {"count": 0, "error": str(e)})
+                return (code, {"count": 0, "error": str(e)}, default_start_date)
         
         # 使用线程池并行下载
         all_results = {}
+        download_ranges = {}  # 记录每只股票的下载起始日期
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # 提交所有下载任务
             future_to_code = {
-                executor.submit(download_single_stock, code): code 
+                executor.submit(download_single_stock, code): code
                 for code in standardized_stocks
             }
-            
+
             # 收集结果
             completed = 0
             total = len(standardized_stocks)
             for future in as_completed(future_to_code):
                 code = future_to_code[future]
                 try:
-                    result_code, result_data = future.result()
+                    result_code, result_data, stock_start_date = future.result()
                     all_results[result_code] = result_data
+                    download_ranges[result_code] = stock_start_date
                     completed += 1
                     logger.info(f"Task {task_id}: Updated {completed}/{total}: {code}")
                 except Exception as e:
                     logger.error(f"Task {task_id}: Exception for {code}: {e}")
                     all_results[code] = {"count": 0, "error": str(e)}
+                    download_ranges[code] = default_start_date
                     completed += 1
 
         logger.info(f"Task {task_id}: All updates completed, saving to Qlib format...")
@@ -236,7 +250,7 @@ def execute_data_update_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
         # 保存数据到 Qlib 格式（使用更新模式）
         save_result = TencentDataService.save_data_to_qlib_format(
             data_dict=all_results,
-            download_ranges=start_date,
+            download_ranges=download_ranges,  # 使用每只股票单独的起始日期
             end_date=end_date,
             use_update_mode=True
         )

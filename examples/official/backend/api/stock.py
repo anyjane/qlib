@@ -4,12 +4,20 @@ from fastapi.responses import StreamingResponse
 from typing import List
 from io import BytesIO
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from loguru import logger
+import sys
+import os
+
+# 添加项目路径到 sys.path，确保能够导入 qlib
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from database import MongoDB
 from models import StockCreate, StockUpdate, StockResponse, StockBatchOperation
 from services.data_service import standardize_stock_codes
+from config import settings
 
 router = APIRouter(prefix="/api/stocks", tags=["Stocks"])
 
@@ -388,3 +396,173 @@ async def batch_operations(operation: str, codes: List[str] = Body(..., embed=Tr
     except Exception as e:
         logger.error(f"Failed batch operation: {e}")
         raise HTTPException(status_code=500, detail=f"批量操作失败: {str(e)}")
+
+
+@router.get("/{code}/history")
+async def get_stock_history(code: str, limit: int = 20):
+    """
+    获取股票历史数据
+
+    Args:
+        code: 股票代码
+        limit: 返回记录数限制（默认20条）
+
+    Returns:
+        历史数据列表
+    """
+    try:
+        # 检查股票是否存在
+        stock = await MongoDB.get_stock(code)
+        if not stock:
+            raise HTTPException(status_code=404, detail="股票不存在")
+
+        # 导入 Qlib
+        try:
+            import qlib
+            from qlib.data import D
+            from qlib.config import REG_CN
+
+            # 初始化 Qlib（如果尚未初始化）
+            try:
+                provider_uri = settings.QLIB_PROVIDER_URI
+                region_config = REG_CN if settings.QLIB_REGION.upper() == "CN" else settings.QLIB_REGION
+                qlib.init(provider_uri=provider_uri, region=region_config, redis_cache=None)
+                logger.info(f"Qlib initialized for history query: {code}")
+            except Exception as init_error:
+                logger.warning(f"Qlib may already be initialized: {init_error}")
+
+            # 查询历史数据
+            # 获取最近 30 天的数据（确保足够 limit 条）
+            end_date = datetime.now().strftime("%Y-%m-%d")
+            start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+
+            # 使用 Qlib 的 features API 查询数据
+            fields = [
+                "$open", "$close", "$high", "$low", "$volume", "$amount"
+            ]
+
+            try:
+                df = D.features(
+                    [code],
+                    fields,
+                    start_time=start_date,
+                    end_time=end_date,
+                    freq="day"
+                )
+
+                # 转换数据格式
+                if df.empty:
+                    logger.warning(f"No history data found for {code}")
+                    return []
+
+                # 重置索引，将日期列转为普通列
+                df = df.reset_index()
+
+                # 提取数据
+                history = []
+                for _, row in df.iterrows():
+                    # 计算涨跌幅（change）
+                    close_price = row.get(f"($close, {code})")
+                    open_price = row.get(f"($open, {code})")
+
+                    if close_price and open_price and open_price != 0:
+                        change = (close_price - open_price) / open_price
+                    else:
+                        change = 0
+
+                    history.append({
+                        "date": row["datetime"].strftime("%Y-%m-%d") if pd.notna(row.get("datetime")) else "",
+                        "open": float(row.get(f"($open, {code})", 0)) if pd.notna(row.get(f"($open, {code})")) else None,
+                        "close": float(row.get(f"($close, {code})", 0)) if pd.notna(row.get(f"($close, {code})")) else None,
+                        "high": float(row.get(f"($high, {code})", 0)) if pd.notna(row.get(f"($high, {code})")) else None,
+                        "low": float(row.get(f"($low, {code})", 0)) if pd.notna(row.get(f"($low, {code})")) else None,
+                        "volume": float(row.get(f"($volume, {code})", 0)) if pd.notna(row.get(f"($volume, {code})")) else None,
+                        "amount": float(row.get(f"($amount, {code})", 0)) if pd.notna(row.get(f"($amount, {code})")) else None,
+                        "change": change
+                    })
+
+                # 按日期降序排序，并限制返回数量
+                history.sort(key=lambda x: x["date"], reverse=True)
+                history = history[:limit]
+
+                logger.info(f"Retrieved {len(history)} history records for {code}")
+                return history
+
+            except Exception as query_error:
+                logger.error(f"Failed to query Qlib data for {code}: {query_error}")
+                # 如果 Qlib 查询失败，尝试读取 CSV 文件
+                return await _read_history_from_csv(code, limit)
+
+        except ImportError as import_error:
+            logger.warning(f"Failed to import qlib: {import_error}")
+            # 如果无法导入 Qlib，尝试读取 CSV 文件
+            return await _read_history_from_csv(code, limit)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get stock history for {code}: {e}")
+        raise HTTPException(status_code=500, detail=f"获取历史数据失败: {str(e)}")
+
+
+async def _read_history_from_csv(code: str, limit: int) -> List[dict]:
+    """
+    从 CSV 文件读取历史数据（备用方法）
+
+    Args:
+        code: 股票代码
+        limit: 返回记录数限制
+
+    Returns:
+        历史数据列表
+    """
+    try:
+        from pathlib import Path
+        import pandas as pd
+
+        # 查找 CSV 文件
+        provider_uri = Path(settings.QLIB_PROVIDER_URI).expanduser()
+        metadata_file = provider_uri / "metadata" / f"{code}.json"
+
+        if not metadata_file.exists():
+            logger.warning(f"Metadata file not found for {code}")
+            return []
+
+        # 读取元数据获取日期范围
+        import json
+        with open(metadata_file, 'r') as f:
+            metadata = json.load(f)
+
+        # 尝试从 normalize 目录读取 CSV
+        normalize_dir = provider_uri / "features" / code
+        csv_files = list(normalize_dir.glob("*.csv")) if normalize_dir.exists() else []
+
+        if csv_files:
+            csv_path = csv_files[0]
+            df = pd.read_csv(csv_path)
+
+            # 转换为历史数据格式
+            history = []
+            for _, row in df.tail(limit).iterrows():
+                history.append({
+                    "date": row.get("date", ""),
+                    "open": float(row.get("open", 0)) if pd.notna(row.get("open")) else None,
+                    "close": float(row.get("close", 0)) if pd.notna(row.get("close")) else None,
+                    "high": float(row.get("high", 0)) if pd.notna(row.get("high")) else None,
+                    "low": float(row.get("low", 0)) if pd.notna(row.get("low")) else None,
+                    "volume": float(row.get("volume", 0)) if pd.notna(row.get("volume")) else None,
+                    "amount": float(row.get("amount", 0)) if pd.notna(row.get("amount")) else None,
+                    "change": float(row.get("change", 0)) if pd.notna(row.get("change")) else 0
+                })
+
+            # 按日期降序排序
+            history.sort(key=lambda x: x["date"], reverse=True)
+            return history
+        else:
+            logger.warning(f"No CSV files found for {code}")
+            return []
+
+    except Exception as e:
+        logger.error(f"Failed to read history from CSV for {code}: {e}")
+        return []
+

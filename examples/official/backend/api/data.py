@@ -145,7 +145,7 @@ async def execute_update_task(task_id: str, stocks: List[str]):
         for idx, code in enumerate(stocks):
             try:
                 # 获取该股票的已有数据结束日期
-                data_info = await TencentDataService.get_stock_data_info(code)
+                data_info = TencentDataService.get_stock_data_info(code)
                 if data_info.get("has_data"):
                     # 从已有数据的结束日期的下一天开始
                     end_date_str = data_info.get("end_date")
@@ -402,7 +402,7 @@ async def get_stocks_data_status():
         stocks = await MongoDB.get_stocks(enabled_only=True)
         result = []
         for stock in stocks:
-            data_info = await TencentDataService.get_stock_data_info(stock['code'])
+            data_info = TencentDataService.get_stock_data_info(stock['code'])
             result.append({
                 "code": stock['code'],
                 "name": stock['name'],

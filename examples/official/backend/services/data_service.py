@@ -393,7 +393,7 @@ class TencentDataService:
 
                 # 获取该股票的实际下载日期范围
                 if isinstance(download_ranges, dict) and code in download_ranges:
-                    code_start_date = download_ranges[code]["start"]
+                    code_start_date = download_ranges[code]  # Now it's just a date string
                     logger.info(f"[{code}] 使用实际下载日期范围: {code_start_date} 到 {end_date}")
                 elif isinstance(download_ranges, str):
                     code_start_date = download_ranges
@@ -570,13 +570,34 @@ class TencentDataService:
                                     df = pd.read_csv(csv_path)
                                     if not df.empty and 'date' in df.columns:
                                         df['date'] = pd.to_datetime(df['date'])
+                                        new_start = df['date'].min().strftime('%Y-%m-%d')
+                                        new_end = df['date'].max().strftime('%Y-%m-%d')
+                                        new_count = len(df)
+                                        
+                                        # 读取现有元数据并合并
+                                        metadata_file = metadata_dir / f"{code}.json"
+                                        old_start = new_start
+                                        old_count = 0
+                                        
+                                        if metadata_file.exists():
+                                            try:
+                                                with open(metadata_file, 'r') as f:
+                                                    old_metadata = json.load(f)
+                                                    # 保留更早的开始日期
+                                                    if old_metadata.get("start_date"):
+                                                        old_start = min(old_metadata["start_date"], new_start)
+                                                    old_count = old_metadata.get("count", 0)
+                                            except Exception:
+                                                pass
+                                        
+                                        # 合并后的元数据
                                         metadata = {
-                                            "start_date": df['date'].min().strftime('%Y-%m-%d'),
-                                            "end_date": df['date'].max().strftime('%Y-%m-%d'),
-                                            "count": len(df),
+                                            "start_date": old_start,  # 保留最早的开始日期
+                                            "end_date": new_end,      # 使用最新的结束日期
+                                            "count": old_count + new_count,  # 累加数量（近似值）
                                             "updated_at": datetime.now().isoformat()
                                         }
-                                        metadata_file = metadata_dir / f"{code}.json"
+                                        
                                         with open(metadata_file, 'w') as f:
                                             json.dump(metadata, f, indent=2)
                                         logger.info(f"[{code}] 保存元数据: {metadata}")
@@ -606,7 +627,7 @@ class TencentDataService:
         return results
     
     @staticmethod
-    async def get_stock_data_info(code: str) -> dict:
+    def get_stock_data_info(code: str) -> dict:
         """
         从文件系统检查股票数据信息（不初始化 Qlib）
 

@@ -51,6 +51,7 @@
         :data="filteredStocks"
         @selection-change="handleSelectionChange"
         @select="handleSelect"
+        @row-dblclick="handleRowDblClick"
         stripe
         height="calc(100vh - 300px)"
       >
@@ -135,6 +136,13 @@
 
     <!-- 任务监控面板 -->
     <TaskMonitor />
+
+    <!-- 历史记录弹窗 -->
+    <HistoryDialog
+      v-model:visible="historyDialogVisible"
+      :stock-code="selectedStockForHistory.code"
+      :stock-name="selectedStockForHistory.name"
+    />
   </div>
 </template>
 
@@ -145,11 +153,13 @@ import { Search, Refresh, Download, Delete } from '@element-plus/icons-vue'
 import request from '../utils/request'
 import wsClient from '../utils/websocket'
 import TaskMonitor from './TaskMonitor.vue'
+import HistoryDialog from './HistoryDialog.vue'
 
 export default {
   name: 'DataManager',
   components: {
     TaskMonitor,
+    HistoryDialog,
     Search,
     Refresh,
     Download,
@@ -162,6 +172,8 @@ export default {
     const loading = ref(false)
     const tableRef = ref(null)
     const lastClickedIndex = ref(-1)
+    const historyDialogVisible = ref(false)
+    const selectedStockForHistory = ref({ code: '', name: '' })
 
     // 过滤后的股票列表
     const filteredStocks = computed(() => {
@@ -384,6 +396,15 @@ export default {
       }
     }
 
+    // 双击行事件处理
+    const handleRowDblClick = (row) => {
+      selectedStockForHistory.value = {
+        code: row.code,
+        name: row.name
+      }
+      historyDialogVisible.value = true
+    }
+
     onMounted(() => {
       loadStocksData()
       wsClient.connect('ws://localhost:8000')
@@ -411,6 +432,8 @@ export default {
       loading,
       filteredStocks,
       tableRef,
+      historyDialogVisible,
+      selectedStockForHistory,
       sortByField,
       sortByDate,
       sortByStatus,
@@ -424,7 +447,8 @@ export default {
       handleBatchDownload,
       handleBatchUpdate,
       handleBatchDelete,
-      handleDeleteStock
+      handleDeleteStock,
+      handleRowDblClick
     }
   }
 }
