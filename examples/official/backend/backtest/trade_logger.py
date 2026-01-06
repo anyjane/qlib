@@ -3,7 +3,7 @@ from typing import Dict, List
 from datetime import datetime
 from loguru import logger
 
-from .types import (
+from .type_defs import (
     DailyTradeLog,
     BuyDetail,
     SellDetail,

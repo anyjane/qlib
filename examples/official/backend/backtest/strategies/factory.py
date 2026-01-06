@@ -3,7 +3,7 @@ from typing import Dict, Any
 from .base_strategy import BaseStrategy
 from .topk_dropout import TopkDropoutStrategy
 from .topk_reallocation import TopkReallocationStrategy
-from ..types import StrategyType
+from ..type_defs import StrategyType
 
 
 # 策略注册表
@@ -45,7 +45,7 @@ def get_available_strategies() -> Dict[StrategyType, Dict[str, Any]]:
     Returns:
         策略信息字典
     """
-    from ..types import StrategyInfo
+    from ..type_defs import StrategyInfo
 
     strategies = {
         StrategyType.TOPK_DROPOUT: StrategyInfo(

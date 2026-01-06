@@ -15,6 +15,7 @@ from backtest import (
     MethodType,
     get_available_strategies,
 )
+from backtest.type_defs import StrategyInfo
 
 router = APIRouter(prefix="/api/backtest-enhanced", tags=["Backtest Enhanced"])
 

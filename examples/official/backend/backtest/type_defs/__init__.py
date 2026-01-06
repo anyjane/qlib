@@ -1,5 +1,5 @@
 """回测类型定义"""
-from types.backtest_types import (
+from .backtest_types import (
     BacktestConfig,
     BacktestResult,
     BacktestMetrics,

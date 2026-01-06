@@ -8,8 +8,8 @@ project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from backtest import BacktestConfig, StrategyType, MethodType, BacktestService
-from types.backtest_types import BacktestConfig
+from backtest import BacktestService
+from backtest.type_defs import BacktestConfig, StrategyType, MethodType
 from loguru import logger
 
 

@@ -4,11 +4,12 @@ from .strategies import (
     TopkDropoutStrategy,
     TopkReallocationStrategy,
     create_strategy,
+    get_available_strategies,
 )
 from .data_loader import FeaturesDataLoader
 from .trade_logger import TradeLogger
 from .service import BacktestService
-from .types import (
+from .type_defs import (
     BacktestConfig,
     BacktestResult,
     BacktestMetrics,
@@ -28,6 +29,7 @@ __all__ = [
     "TopkDropoutStrategy",
     "TopkReallocationStrategy",
     "create_strategy",
+    "get_available_strategies",
     # Components
     "FeaturesDataLoader",
     "TradeLogger",
