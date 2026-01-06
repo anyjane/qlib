@@ -53,18 +53,53 @@
         height="calc(100vh - 300px)"
       >
         <el-table-column type="selection" width="55" />
-        <el-table-column prop="code" label="股票代码" width="120" />
-        <el-table-column prop="name" label="股票名称" width="150" />
-        <el-table-column label="数据状态" width="120">
+        <el-table-column
+          prop="code"
+          label="股票代码"
+          width="120"
+          sortable
+          :sort-method="(a, b) => sortByField(a, b, 'code')"
+        />
+        <el-table-column
+          prop="name"
+          label="股票名称"
+          width="150"
+          sortable
+          :sort-method="(a, b) => sortByField(a, b, 'name')"
+        />
+        <el-table-column
+          label="数据状态"
+          width="120"
+          sortable
+          :sort-method="(a, b) => sortByStatus(a, b)"
+        >
           <template #default="{ row }">
             <el-tag :type="row.has_data ? 'success' : 'info'">
               {{ row.has_data ? '已有数据' : '无数据' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="data_start_date" label="数据开始日期" width="120" />
-        <el-table-column prop="data_end_date" label="数据结束日期" width="120" />
-        <el-table-column prop="data_count" label="数据量" width="100" />
+        <el-table-column
+          prop="data_start_date"
+          label="数据开始日期"
+          width="140"
+          sortable
+          :sort-method="(a, b) => sortByDate(a, b, 'data_start_date')"
+        />
+        <el-table-column
+          prop="data_end_date"
+          label="数据结束日期"
+          width="140"
+          sortable
+          :sort-method="(a, b) => sortByDate(a, b, 'data_end_date')"
+        />
+        <el-table-column
+          prop="data_count"
+          label="数据量"
+          width="100"
+          sortable
+          :sort-method="(a, b) => sortByField(a, b, 'data_count', true)"
+        />
         <el-table-column label="操作" fixed="right" width="200">
           <template #default="{ row }">
             <el-button
@@ -153,6 +188,12 @@ export default {
       selectedStocks.value = selection
     }
 
+    // 排序变化
+    const handleSortChange = ({ prop, order }) => {
+      sortField.value = prop
+      sortOrder.value = order || 'ascending'
+    }
+
     // 全选
     const handleSelectAll = () => {
       selectedStocks.value = [...filteredStocks.value]
@@ -161,6 +202,36 @@ export default {
     // 清空选择
     const handleClearSelection = () => {
       selectedStocks.value = []
+    }
+
+    // 日期对比函数
+    const compareDates = (date1, date2) => {
+      if (!date1 && !date2) return 0
+      if (!date1) return -1
+      if (!date2) return 1
+      return new Date(date1).getTime() - new Date(date2).getTime()
+    }
+
+    // 按字段排序（用于 Element Plus 的 sort-method）
+    const sortByField = (a, b, field, isNumber = false) => {
+      const valA = a[field] || (isNumber ? 0 : '')
+      const valB = b[field] || (isNumber ? 0 : '')
+
+      if (isNumber) {
+        return valA - valB
+      }
+      return String(valA).localeCompare(String(valB))
+    }
+
+    // 按日期排序
+    const sortByDate = (a, b, field) => {
+      return compareDates(a[field], b[field])
+    }
+
+    // 按数据状态排序
+    const sortByStatus = (a, b) => {
+      // 有数据的排在前面
+      return (b.has_data ? 1 : 0) - (a.has_data ? 1 : 0)
     }
 
     // 下载数据
@@ -272,6 +343,9 @@ export default {
       selectedStocks,
       loading,
       filteredStocks,
+      sortByField,
+      sortByDate,
+      sortByStatus,
       handleRefresh,
       handleSelectionChange,
       handleSelectAll,
