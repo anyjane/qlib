@@ -34,6 +34,11 @@ const routes = [
     path: '/logs',
     name: 'LogManager',
     component: () => import('./components/LogManager.vue')
+  },
+  {
+    path: '/backtest',
+    name: 'BacktestManager',
+    component: () => import('./components/BacktestManager.vue')
   }
 ]
 

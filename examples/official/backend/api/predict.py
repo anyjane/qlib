@@ -288,7 +288,7 @@ async def validate_data_date(date: str = Query(..., description="数据日期（
     """
     验证数据日期
 
-    检查是否有足够的股票数据（超过5个代码无数据则返回错误）
+    检查是否有足够的股票 K线数据（超过5个代码无数据则返回错误）
 
     Args:
         date: 数据日期
@@ -310,24 +310,41 @@ async def validate_data_date(date: str = Query(..., description="数据日期（
         if not all_stocks:
             raise HTTPException(status_code=400, detail="没有启用的股票代码")
 
-        # 检查是否有预测数据
-        query = {"date": date, "code": {"$in": all_stocks}}
-        existing_predictions = await MongoDB.get_predictions(query=query)
-
-        existing_codes = set(p["code"] for p in existing_predictions)
-        missing_codes = [code for code in all_stocks if code not in existing_codes]
+        # 检查 Qlib 元数据（K线数据是否覆盖到指定日期）
+        from pathlib import Path
+        import json
+        from config import settings
+        
+        metadata_dir = Path(settings.QLIB_PROVIDER_URI).expanduser() / "metadata"
+        missing_codes = []
+        
+        for code in all_stocks:
+            metadata_file = metadata_dir / f"{code}.json"
+            if not metadata_file.exists():
+                missing_codes.append(code)
+                continue
+            
+            try:
+                with open(metadata_file, 'r') as f:
+                    metadata = json.load(f)
+                    end_date = metadata.get("end_date", "")
+                    # 如果数据结束日期早于请求日期，认为数据不完整
+                    if end_date < date:
+                        missing_codes.append(code)
+            except Exception:
+                missing_codes.append(code)
 
         if len(missing_codes) > 5:
             return {
                 "valid": False,
-                "error": f"数据不完整：{len(missing_codes)} 个股票代码缺少数据（允许最多5个）",
+                "error": f"数据不完整：{len(missing_codes)} 个股票代码缺少 {date} 的数据（允许最多5个）",
                 "missing_count": len(missing_codes),
                 "missing_codes": missing_codes[:10]  # 只返回前10个
             }
 
         return {
             "valid": True,
-            "message": "数据验证通过"
+            "message": f"数据验证通过，{len(all_stocks) - len(missing_codes)}/{len(all_stocks)} 个股票有 {date} 的数据"
         }
 
     except HTTPException:

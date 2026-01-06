@@ -192,6 +192,13 @@ def execute_data_update_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
 
         # 标准化股票代码
         standardized_stocks = TencentDataService.standardize_stock_codes(stocks)
+        
+        # 添加基准指数 (沪深300, 中证500)
+        benchmarks = ["sh000300", "sh000905"]
+        for benchmark in benchmarks:
+            if benchmark not in standardized_stocks:
+                standardized_stocks.append(benchmark)
+                logger.info(f"Added benchmark index {benchmark} to download list")
 
         # 定义单个股票下载函数
         def download_single_stock(code: str) -> tuple:
@@ -314,11 +321,48 @@ def execute_prediction_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
 
         result = predictor.predict(
             predict_date=predict_date,
-            stock_codes=stocks,
-            progress_callback=None  # 不使用进度回调，避免依赖 ProgressReporter
+            stock_codes=stocks
         )
 
-        logger.info(f"Task {task_id}: Prediction completed")
+        logger.info(f"Task {task_id}: Prediction completed, saving to database...")
+
+        # 使用同步 pymongo 保存预测结果到数据库
+        from pymongo import MongoClient
+        
+        mongo_client = MongoClient(settings.MONGODB_URL)
+        db = mongo_client[settings.MONGODB_DB_NAME]
+        
+        # 转换预测结果格式并添加 task_id
+        predictions_to_save = []
+        for pred in result.get("predictions", []):
+            predictions_to_save.append({
+                "task_id": task_id,
+                "date": predict_date,
+                "code": pred["code"],
+                "name": pred.get("name", "Unknown"),
+                "score": pred["score"],
+                "execution_timestamp": result.get("execution_timestamp"),
+                "data_date": result.get("data_date"),
+                "created_at": datetime.now()
+            })
+        
+        if predictions_to_save:
+            db.predictions.insert_many(predictions_to_save)
+            logger.info(f"Task {task_id}: Saved {len(predictions_to_save)} predictions to database")
+        
+        # 更新任务状态
+        db.prediction_tasks.update_one(
+            {"task_id": task_id},
+            {"$set": {
+                "status": "completed",
+                "progress": 100,
+                "predicted_count": len(predictions_to_save),
+                "updated_at": datetime.now()
+            }}
+        )
+        
+        mongo_client.close()
+        logger.info(f"Task {task_id}: Database update completed")
 
         return {
             "task_id": task_id,
@@ -342,11 +386,109 @@ def execute_prediction_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
+def execute_backtest_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    执行回测任务
+    """
+    task_type = task_params.get("task_type")
+    task_id = task_params.get("task_id")
+    market = task_params.get("market", "all")
+    train_start = task_params.get("train_start", "2020-01-01")
+    train_end = task_params.get("train_end", "2024-12-31")
+    test_start = task_params.get("test_start", "2025-01-01")
+    test_end = task_params.get("test_end", "2025-12-31")
+    experiment_name = task_params.get("experiment_name", f"backtest_{task_id}")
+    provider_uri = task_params.get("provider_uri", settings.QLIB_PROVIDER_URI)
+
+    logger.info(f"Executing backtest task {task_id}")
+    logger.info(f"Market: {market}, Train: {train_start} ~ {train_end}, Test: {test_start} ~ {test_end}")
+
+    try:
+        from services.backtest_service import BacktestService
+        from pymongo import MongoClient
+        
+        # 更新任务状态为运行中
+        mongo_client = MongoClient(settings.MONGODB_URL)
+        db = mongo_client[settings.MONGODB_DB_NAME]
+        db.backtest_tasks.update_one(
+            {"task_id": task_id},
+            {"$set": {"status": "running", "updated_at": datetime.now()}}
+        )
+        
+        # 执行回测
+        results = BacktestService.run_backtest(
+            provider_uri=provider_uri,
+            market=market,
+            train_start=train_start,
+            train_end=train_end,
+            test_start=test_start,
+            test_end=test_end,
+            experiment_name=experiment_name,
+        )
+        
+        # 保存结果到数据库
+        results_doc = {
+            "task_id": task_id,
+            "annual_return_no_cost": results.get("annual_return_no_cost"),
+            "sharpe_ratio_no_cost": results.get("sharpe_ratio_no_cost"),
+            "max_drawdown_no_cost": results.get("max_drawdown_no_cost"),
+            "annual_return_with_cost": results.get("annual_return_with_cost"),
+            "sharpe_ratio_with_cost": results.get("sharpe_ratio_with_cost"),
+            "max_drawdown_with_cost": results.get("max_drawdown_with_cost"),
+            "created_at": datetime.now(),
+        }
+        db.backtest_results.insert_one(results_doc)
+        
+        # 更新任务状态为完成
+        db.backtest_tasks.update_one(
+            {"task_id": task_id},
+            {"$set": {"status": "completed", "updated_at": datetime.now()}}
+        )
+        
+        mongo_client.close()
+        logger.info(f"Backtest task {task_id} completed successfully")
+
+        return {
+            "task_id": task_id,
+            "task_type": task_type,
+            "status": "completed",
+            "progress": 100.0,
+            "message": "Backtest completed successfully",
+            "results": results,
+            "completed_at": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Backtest task {task_id} failed: {e}")
+        
+        # 更新任务状态为失败
+        try:
+            from pymongo import MongoClient
+            mongo_client = MongoClient(settings.MONGODB_URL)
+            db = mongo_client[settings.MONGODB_DB_NAME]
+            db.backtest_tasks.update_one(
+                {"task_id": task_id},
+                {"$set": {"status": "failed", "error": str(e), "updated_at": datetime.now()}}
+            )
+            mongo_client.close()
+        except Exception:
+            pass
+        
+        return {
+            "task_id": task_id,
+            "task_type": task_type,
+            "status": "failed",
+            "progress": 0.0,
+            "error": str(e),
+            "completed_at": datetime.now().isoformat()
+        }
+
+
 # 任务类型映射字典
 TASK_EXECUTORS = {
     "data_download": execute_data_download_task,
     "data_update": execute_data_update_task,
     "prediction": execute_prediction_task,
+    "backtest": execute_backtest_task,
 }
 
 

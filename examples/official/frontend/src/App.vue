@@ -35,6 +35,10 @@
               <i class="el-icon-folder-opened"></i>
               <span>日志管理</span>
             </el-menu-item>
+            <el-menu-item index="/backtest">
+              <i class="el-icon-odometer"></i>
+              <span>量化回测</span>
+            </el-menu-item>
           </el-menu>
         </el-aside>
         <el-main>

@@ -353,3 +353,55 @@ class MongoDB:
         query = {"task_id": task_id}
         predictions = await cls.get_predictions(query=query, sort=[("score", -1)], limit=None)
         return predictions
+
+    # ============================================================================
+    # Backtest Tasks Collection Operations
+    # ============================================================================
+
+    @classmethod
+    async def get_backtest_tasks(cls, limit: int = None) -> List[Dict]:
+        """Get all backtest tasks"""
+        cursor = cls.database.backtest_tasks.find({}, {"_id": 0}).sort("created_at", -1)
+        if limit:
+            cursor = cursor.limit(limit)
+        tasks = await cursor.to_list(length=None)
+        return tasks if tasks else []
+
+    @classmethod
+    async def get_backtest_task(cls, task_id: str) -> Optional[Dict]:
+        """Get backtest task by ID"""
+        task = await cls.database.backtest_tasks.find_one({"task_id": task_id}, {"_id": 0})
+        return task
+
+    @classmethod
+    async def insert_backtest_task(cls, task_dict: Dict):
+        """Insert a backtest task"""
+        await cls.database.backtest_tasks.insert_one(task_dict)
+
+    @classmethod
+    async def update_backtest_task(cls, task_id: str, update_dict: Dict):
+        """Update backtest task"""
+        await cls.database.backtest_tasks.update_one(
+            {"task_id": task_id},
+            {"$set": update_dict}
+        )
+
+    @classmethod
+    async def delete_backtest_task(cls, task_id: str) -> int:
+        """Delete backtest task and its results"""
+        # Delete task
+        result = await cls.database.backtest_tasks.delete_one({"task_id": task_id})
+        # Also delete associated results
+        await cls.database.backtest_results.delete_many({"task_id": task_id})
+        return result.deleted_count
+
+    @classmethod
+    async def get_backtest_results(cls, task_id: str) -> Optional[Dict]:
+        """Get backtest results by task_id"""
+        result = await cls.database.backtest_results.find_one({"task_id": task_id}, {"_id": 0})
+        return result
+
+    @classmethod
+    async def insert_backtest_results(cls, results_dict: Dict):
+        """Insert backtest results"""
+        await cls.database.backtest_results.insert_one(results_dict)
