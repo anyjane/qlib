@@ -10,12 +10,86 @@ import pandas as pd
 import numpy as np
 from loguru import logger
 import subprocess
+import time
+import platform
 
 # 统一从 config 模块获取配置
 from config import settings
 QLIB_PROVIDER_URI = settings.QLIB_PROVIDER_URI
 
 __all__ = ['TencentDataService', 'standardize_stock_codes']
+
+
+class FileLock:
+    """跨平台文件锁，用于避免并发任务冲突"""
+
+    def __init__(self, lock_file: Path):
+        self.lock_file = lock_file
+        self.lock_fd = None
+        self.is_windows = platform.system() == 'Windows'
+
+    def acquire(self, timeout: int = 60):
+        """获取锁，带超时"""
+        logger.debug(f"尝试获取锁: {self.lock_file}")
+        start_time = time.time()
+
+        while True:
+            try:
+                if self.is_windows:
+                    # Windows 使用目录锁
+                    # 如果目录已存在，说明锁被持有
+                    if self.lock_file.exists():
+                        raise IOError("Lock already held")
+                    self.lock_file.mkdir(parents=True)
+                    logger.info(f"成功获取锁: {self.lock_file}")
+                    return True
+                else:
+                    # Unix 系统，使用 fcntl
+                    import fcntl
+                    # 尝试创建锁文件并获取文件描述符
+                    self.lock_fd = open(self.lock_file, 'w')
+                    # 尝试获取排他锁
+                    fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    logger.info(f"成功获取锁: {self.lock_file}")
+                    return True
+
+            except (IOError, OSError):
+                # 锁已被其他进程持有
+                if time.time() - start_time > timeout:
+                    logger.warning(f"获取锁超时: {self.lock_file}")
+                    return False
+                # 等待后重试
+                time.sleep(0.1)
+
+    def release(self):
+        """释放锁"""
+        try:
+            if self.is_windows:
+                # Windows：删除锁目录
+                if self.lock_file.exists():
+                    self.lock_file.rmdir()
+                logger.debug(f"释放锁: {self.lock_file}")
+            else:
+                # Unix：释放 fcntl 锁
+                if self.lock_fd:
+                    try:
+                        import fcntl
+                        fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_UN)
+                        self.lock_fd.close()
+                        # 删除锁文件
+                        if self.lock_file.exists():
+                            self.lock_file.unlink()
+                        logger.debug(f"释放锁: {self.lock_file}")
+                    except Exception as e:
+                        logger.warning(f"释放锁失败: {e}")
+        except Exception as e:
+            logger.warning(f"释放锁失败: {e}")
+
+    def __enter__(self):
+        return self.acquire()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
 
 
 def standardize_stock_codes(codes: List[str]) -> List[str]:
@@ -272,13 +346,19 @@ class TencentDataService:
         results = {}
         qlib_dir = Path(QLIB_PROVIDER_URI).expanduser()
 
-        # 创建临时目录
-        temp_dir = qlib_dir / "temp_download"
+        # 创建唯一的临时目录，避免并发任务冲突
+        # 使用时间戳 + 随机数生成唯一目录名
+        temp_dir_name = f"temp_download_{int(time.time() * 1000)}"
+        temp_dir = qlib_dir / temp_dir_name
         temp_dir.mkdir(parents=True, exist_ok=True)
 
         # 归一化数据目录
         normalize_dir = temp_dir / "normalize"
         normalize_dir.mkdir(parents=True, exist_ok=True)
+
+        # 创建全局锁文件，避免多个任务同时操作同一只股票
+        lock_file = qlib_dir / ".data_save.lock"
+        lock = FileLock(lock_file)
 
         # 收集所有需要更新的股票代码
         updated_codes = []
@@ -404,71 +484,79 @@ class TencentDataService:
         try:
             logger.info(f"开始将数据转换为 Qlib 格式，目标目录: {qlib_dir}")
 
-            # 只在 dump_fix 模式（非更新）下删除旧数据
-            # dump_update 模式下需要保留旧数据以便追加
-            if not use_update_mode:
-                # 只对有新数据的股票删除旧数据
-                for code in updated_codes:
-                    instrument_path = qlib_dir / "features" / code
-                    if instrument_path.exists():
-                        shutil.rmtree(instrument_path)
-                        logger.info(f"[{code}] 删除旧数据（dump_fix 模式）")
+            # 获取文件锁，避免并发任务冲突
+            if lock.acquire(timeout=30):
+                try:
+                    # 只在 dump_fix 模式（非更新）下删除旧数据
+                    # dump_update 模式下需要保留旧数据以便追加
+                    if not use_update_mode:
+                        # 只对有新数据的股票删除旧数据
+                        for code in updated_codes:
+                            instrument_path = qlib_dir / "features" / code
+                            if instrument_path.exists():
+                                shutil.rmtree(instrument_path)
+                                logger.info(f"[{code}] 删除旧数据（dump_fix 模式）")
+                    else:
+                        logger.info("使用 dump_update 模式，保留旧数据以进行追加")
+
+                    # 使用 dump_bin.py 脚本来转换数据
+                    # 由于 dump_bin 有复杂的依赖，使用 subprocess 调用更可靠
+                    dump_script = Path(__file__).parent.parent.parent.parent.parent / "scripts" / "dump_bin.py"
+
+                    # 检查 calendar 文件是否存在（用于判断是否为首次数据导入）
+                    calendar_file = qlib_dir / "calendars" / "day.txt"
+                    instruments_file = qlib_dir / "instruments" / "all.txt"
+
+                    # 选择正确的 dump 模式：
+                    # - dump_all: 首次导入，创建所有基础文件（calendars, instruments）
+                    # - dump_fix: 添加新股票到现有数据库
+                    # - dump_update: 更新现有股票的数据（追加新日期）
+                    if not calendar_file.exists() or not instruments_file.exists():
+                        # 首次导入数据，使用 dump_all
+                        mode = "dump_all"
+                        logger.info("首次数据导入，使用 dump_all 模式")
+                    elif use_update_mode:
+                        # 增量更新现有股票数据
+                        mode = "dump_update"
+                        logger.info("使用 dump_update 模式进行增量更新")
+                    else:
+                        # 添加新股票或重新下载
+                        mode = "dump_fix"
+                        logger.info("使用 dump_fix 模式添加/更新股票数据")
+
+                    cmd = [
+                        sys.executable,
+                        str(dump_script),
+                        mode,
+                        "--data_path", str(normalize_dir),
+                        "--qlib_dir", str(qlib_dir),
+                        "--freq", "day",
+                        "--date_field_name", "date",
+                        "--symbol_field_name", "symbol",
+                        "--include_fields", "open,close,high,low,volume,amount,change,factor",
+                        "--max_workers", "1"
+                    ]
+
+                    logger.info(f"执行 {mode} 命令: {' '.join(cmd)}")
+
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=300  # 5分钟超时
+                    )
+
+                    if result.returncode != 0:
+                        logger.error(f"dump_bin 执行失败: {result.stderr}")
+                        raise Exception(f"dump_bin failed with return code {result.returncode}")
+                    else:
+                        logger.info("数据转换完成")
+                finally:
+                    # 释放文件锁
+                    lock.release()
             else:
-                logger.info("使用 dump_update 模式，保留旧数据以进行追加")
-
-            # 使用 dump_bin.py 脚本来转换数据
-            # 由于 dump_bin 有复杂的依赖，使用 subprocess 调用更可靠
-            dump_script = Path(__file__).parent.parent.parent.parent.parent / "scripts" / "dump_bin.py"
-
-            # 检查 calendar 文件是否存在（用于判断是否为首次数据导入）
-            calendar_file = qlib_dir / "calendars" / "day.txt"
-            instruments_file = qlib_dir / "instruments" / "all.txt"
-            
-            # 选择正确的 dump 模式：
-            # - dump_all: 首次导入，创建所有基础文件（calendars, instruments）
-            # - dump_fix: 添加新股票到现有数据库
-            # - dump_update: 更新现有股票的数据（追加新日期）
-            if not calendar_file.exists() or not instruments_file.exists():
-                # 首次导入数据，使用 dump_all
-                mode = "dump_all"
-                logger.info("首次数据导入，使用 dump_all 模式")
-            elif use_update_mode:
-                # 增量更新现有股票数据
-                mode = "dump_update"
-                logger.info("使用 dump_update 模式进行增量更新")
-            else:
-                # 添加新股票或重新下载
-                mode = "dump_fix"
-                logger.info("使用 dump_fix 模式添加/更新股票数据")
-
-            cmd = [
-                sys.executable,
-                str(dump_script),
-                mode,
-                "--data_path", str(normalize_dir),
-                "--qlib_dir", str(qlib_dir),
-                "--freq", "day",
-                "--date_field_name", "date",
-                "--symbol_field_name", "symbol",
-                "--include_fields", "open,close,high,low,volume,amount,change,factor",
-                "--max_workers", "1"
-            ]
-
-            logger.info(f"执行 {mode} 命令: {' '.join(cmd)}")
-
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300  # 5分钟超时
-            )
-
-            if result.returncode != 0:
-                logger.error(f"dump_bin 执行失败: {result.stderr}")
-                raise Exception(f"dump_bin failed with return code {result.returncode}")
-            else:
-                logger.info("数据转换完成")
-
+                logger.warning("获取锁超时，无法执行数据转换")
+                raise Exception("Failed to acquire data save lock, another process may be running")
         except subprocess.TimeoutExpired:
             logger.error("dump_bin 执行超时")
             raise Exception("dump_bin execution timeout")
@@ -490,18 +578,13 @@ class TencentDataService:
         """
         从文件系统检查股票数据信息（不初始化 Qlib）
 
-        读取 instruments/all.txt 获取日期范围
-        通过二进制文件大小计算数据条数
+        通过二进制文件的起始索引和日历文件计算真实的日期范围
+        Qlib 二进制格式：前4字节是起始索引(float存储的int)，后续是数据
         """
+        import struct
+        
         try:
             data_path = Path(QLIB_PROVIDER_URI).expanduser()
-            
-            # 标准化代码格式用于匹配（全大写，因为 instruments 文件用大写）
-            code_upper = code.upper()
-            if not code_upper.startswith('SZ') and not code_upper.startswith('SH'):
-                # 如果是 sz000001 格式，转为 SZ000001
-                code_upper = code.upper()
-            
             instrument_path = data_path / "features" / code
             
             if not instrument_path.exists():
@@ -513,34 +596,42 @@ class TencentDataService:
             if not bin_files:
                 return {"has_data": False}
 
-            # 计算数据条数：从 close.day.bin 文件计算
-            # Qlib 二进制格式：4字节起始索引 + N个4字节浮点数
-            record_count = 0
+            # 读取 close.day.bin 文件获取起始索引和数据条数
             close_bin = instrument_path / "close.day.bin"
-            if close_bin.exists():
-                file_size = close_bin.stat().st_size
-                # 减去4字节的起始索引，剩余的每4字节是一条记录
+            if not close_bin.exists():
+                close_bin = bin_files[0]  # 使用任意一个 bin 文件
+            
+            start_index = 0
+            record_count = 0
+            
+            with open(close_bin, 'rb') as f:
+                # 读取前4字节作为起始索引（float 格式存储）
+                index_bytes = f.read(4)
+                if len(index_bytes) == 4:
+                    start_index = int(struct.unpack('<f', index_bytes)[0])
+                
+                # 计算数据条数
+                f.seek(0, 2)  # 移到文件末尾
+                file_size = f.tell()
                 record_count = (file_size - 4) // 4 if file_size > 4 else 0
             
-            # 从 instruments/all.txt 读取日期范围
+            # 从日历文件读取日期列表
             start_date = None
             end_date = None
-            instruments_file = data_path / "instruments" / "all.txt"
+            calendar_file = data_path / "calendars" / "day.txt"
             
-            if instruments_file.exists():
-                with open(instruments_file, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        parts = line.split('\t')
-                        if len(parts) >= 3:
-                            # 格式: SZ000009	2015-01-07	2025-12-31
-                            inst_code = parts[0].lower()  # 转为小写比较
-                            if inst_code == code.lower():
-                                start_date = parts[1]
-                                end_date = parts[2]
-                                break
+            if calendar_file.exists() and record_count > 0:
+                with open(calendar_file, 'r') as f:
+                    calendar_dates = [line.strip() for line in f if line.strip()]
+                
+                # 根据起始索引和记录数计算日期范围
+                if start_index < len(calendar_dates):
+                    start_date = calendar_dates[start_index]
+                    end_index = start_index + record_count - 1
+                    if end_index < len(calendar_dates):
+                        end_date = calendar_dates[end_index]
+                    else:
+                        end_date = calendar_dates[-1]  # 使用日历最后一天
 
             return {
                 "has_data": True,

@@ -73,7 +73,7 @@ def execute_data_download_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
     stocks = task_params.get("stocks", [])
     
     # 并行下载的线程数
-    max_workers = 8
+    max_workers = 16
 
     logger.info(f"Executing data download task {task_id} with {max_workers} parallel workers")
 
@@ -177,7 +177,7 @@ def execute_data_update_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
     stocks = task_params.get("stocks", [])
     
     # 并行下载的线程数
-    max_workers = 8
+    max_workers = 16
 
     logger.info(f"Executing data update task {task_id} with {max_workers} parallel workers")
 
