@@ -71,6 +71,9 @@ class BacktestService:
         test_start: str,
         test_end: str,
         initial_capital: int = 100000000,
+        buy_rate: float = 0.0005,
+        sell_rate: float = 0.0015,
+        min_cost: float = 5.0,
     ) -> Dict:
         """
         创建工作流配置
@@ -83,6 +86,9 @@ class BacktestService:
             test_start: 测试开始日期
             test_end: 测试结束日期
             initial_capital: 初始资金
+            buy_rate: 买入费率
+            sell_rate: 卖出费率
+            min_cost: 最低手续费
             
         Returns:
             工作流配置字典
@@ -142,6 +148,16 @@ class BacktestService:
         port_analysis_config["backtest"]["benchmark"] = benchmark
         port_analysis_config["backtest"]["account"] = initial_capital
         
+        # 更新交易费用配置
+        if "exchange_kwargs" not in port_analysis_config["backtest"]:
+            port_analysis_config["backtest"]["exchange_kwargs"] = {}
+            
+        port_analysis_config["backtest"]["exchange_kwargs"].update({
+            "open_cost": buy_rate,
+            "close_cost": sell_rate,
+            "min_cost": min_cost,
+        })
+        
         # 记录配置
         record_config = [
             {
@@ -194,6 +210,9 @@ class BacktestService:
         test_end: str,
         experiment_name: str,
         initial_capital: int = 100000000,
+        buy_rate: float = 0.0005,
+        sell_rate: float = 0.0015,
+        min_cost: float = 5.0,
     ) -> Dict:
         """
         执行回测
@@ -207,6 +226,9 @@ class BacktestService:
             test_end: 测试结束日期
             experiment_name: 实验名称
             initial_capital: 初始资金
+            buy_rate: 买入费率
+            sell_rate: 卖出费率
+            min_cost: 最低手续费
             
         Returns:
             回测结果字典
@@ -219,6 +241,7 @@ class BacktestService:
         logger.info(f"Capital: {initial_capital}")
         logger.info(f"Train period: {train_start} to {train_end}")
         logger.info(f"Test period: {test_start} to {test_end}")
+        logger.info(f"Commission: Buy={buy_rate}, Sell={sell_rate}, Min={min_cost}")
         logger.info(f"Experiment: {experiment_name}")
         logger.info("=" * 80)
         
@@ -236,6 +259,9 @@ class BacktestService:
             test_start=test_start,
             test_end=test_end,
             initial_capital=initial_capital,
+            buy_rate=buy_rate,
+            sell_rate=sell_rate,
+            min_cost=min_cost,
         )
         
         # 创建模型
@@ -283,7 +309,12 @@ class BacktestService:
             
             # 提取结果
             logger.info("Extracting results...")
-            results = BacktestService.extract_results(recorder)
+            results = BacktestService.extract_results(
+                recorder,
+                buy_rate=buy_rate,
+                sell_rate=sell_rate,
+                min_cost=min_cost,
+            )
         
         logger.info("=" * 80)
         logger.info("BACKTEST COMPLETED")
@@ -299,12 +330,20 @@ class BacktestService:
         return results
 
     @staticmethod
-    def extract_results(recorder) -> Dict:
+    def extract_results(
+        recorder,
+        buy_rate: float = 0.0005,
+        sell_rate: float = 0.0015,
+        min_cost: float = 5.0,
+    ) -> Dict:
         """
         从 recorder 中提取回测结果 (包含详细交易记录)
         
         Args:
             recorder: Qlib recorder
+            buy_rate: 买入费率
+            sell_rate: 卖出费率
+            min_cost: 最低手续费
             
         Returns:
             结果字典
@@ -466,15 +505,20 @@ class BacktestService:
                         amount_diff = prev_amount - curr_amount
                         estimated_price = prices.get(code, 0.0)
                         
+                        # 计算卖出费用
+                        trade_value = amount_diff * estimated_price
+                        commission = max(trade_value * sell_rate, min_cost) if trade_value > 0 else 0.0
+                        
                         sells.append({
                             "code": code,
                             "amount": amount_diff,
                             "price": estimated_price,
-                            "value": amount_diff * estimated_price,
-                            "commission": 0.0, # 简化的手续费计算
-                            "actual_received": amount_diff * estimated_price  # 简化的实际到账
+                            "value": trade_value,
+                            "commission": commission,
+                            "actual_received": max(0, trade_value - commission)
                         })
                         total_trades += 1
+                        total_commission += commission
                 
                 # 检查买入 (今日有，昨日无 或 增加)
                 for code, curr_amount in current_stock_positions.items():
@@ -483,14 +527,19 @@ class BacktestService:
                         amount_diff = curr_amount - prev_amount
                         estimated_price = prices.get(code, 0.0)
                         
+                        # 计算买入费用
+                        trade_value = amount_diff * estimated_price
+                        commission = max(trade_value * buy_rate, min_cost) if trade_value > 0 else 0.0
+                        
                         buys.append({
                             "code": code,
                             "amount": amount_diff,
                             "price": estimated_price,
-                            "value": amount_diff * estimated_price,
-                            "commission": 0.0
+                            "value": trade_value,
+                            "commission": commission
                         })
                         total_trades += 1
+                        total_commission += commission
                 
                 # 构建持仓列表 (带预测分)
                 holdings_list = []
@@ -533,7 +582,7 @@ class BacktestService:
                 results["metrics"]["final_capital"] = 0.0
                 
             results["metrics"]["total_trades"] = total_trades
-            results["metrics"]["total_commission"] = total_commission # 需要更精确的计算
+            results["metrics"]["total_commission"] = total_commission
             
             logger.info(f"Results extracted successfully with {len(trade_logs)} trade logs")
             

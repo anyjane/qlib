@@ -400,6 +400,19 @@ def execute_backtest_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
     experiment_name = task_params.get("experiment_name", f"backtest_{task_id}")
     provider_uri = task_params.get("provider_uri", settings.QLIB_PROVIDER_URI)
     initial_capital = int(task_params.get("initial_capital", 100000000))
+    
+    # Extract commission params, parse from config_json if needed or passed directly
+    import json
+    config_json = task_params.get("config_json", "{}")
+    try:
+        config_dict = json.loads(config_json)
+        buy_rate = float(config_dict.get("buy_rate", 0.0005))
+        sell_rate = float(config_dict.get("sell_rate", 0.0015))
+        min_cost = float(config_dict.get("min_commission", 5.0)) # Note: key is min_commission in config model
+    except:
+        buy_rate = 0.0005
+        sell_rate = 0.0015
+        min_cost = 5.0
 
     logger.info(f"Executing backtest task {task_id}")
     logger.info(f"Market: {market}, Train: {train_start} ~ {train_end}, Test: {test_start} ~ {test_end}, Capital: {initial_capital}")
@@ -426,6 +439,9 @@ def execute_backtest_task(task_params: Dict[str, Any]) -> Dict[str, Any]:
             test_end=test_end,
             experiment_name=experiment_name,
             initial_capital=initial_capital,
+            buy_rate=buy_rate,
+            sell_rate=sell_rate,
+            min_cost=min_cost,
         )
         
         # 保存结果到数据库
