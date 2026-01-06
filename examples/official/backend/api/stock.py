@@ -450,6 +450,8 @@ async def get_stock_history(code: str, limit: int = 20):
                     freq="day"
                 )
 
+                logger.info(f"Qlib returned DataFrame with columns: {df.columns.tolist()}, shape: {df.shape}")
+
                 # 转换数据格式
                 if df.empty:
                     logger.warning(f"No history data found for {code}")
@@ -457,27 +459,60 @@ async def get_stock_history(code: str, limit: int = 20):
 
                 # 重置索引，将日期列转为普通列
                 df = df.reset_index()
+                logger.info(f"DataFrame columns after reset: {df.columns.tolist()}")
 
                 # 提取数据
                 history = []
+                
+                # 检测实际的列名格式
+                # Qlib 可能返回不同格式: '$open', '($open, code)', 或多级索引
+                def get_column_value(row, field):
+                    """灵活获取列值"""
+                    possible_names = [
+                        field,  # '$open'
+                        f"({field}, {code})",  # '($open, code)'
+                        f"({field}, '{code}')",  # "($open, 'code')"
+                        field.replace('$', ''),  # 'open'
+                    ]
+                    for name in possible_names:
+                        if name in row.index:
+                            val = row[name]
+                            if pd.notna(val):
+                                return float(val)
+                    return None
+                
                 for _, row in df.iterrows():
-                    # 计算涨跌幅（change）
-                    close_price = row.get(f"($close, {code})")
-                    open_price = row.get(f"($open, {code})")
+                    open_price = get_column_value(row, "$open")
+                    close_price = get_column_value(row, "$close")
+                    high_price = get_column_value(row, "$high")
+                    low_price = get_column_value(row, "$low")
+                    volume = get_column_value(row, "$volume")
+                    amount = get_column_value(row, "$amount")
 
+                    # 计算涨跌幅（change）
                     if close_price and open_price and open_price != 0:
                         change = (close_price - open_price) / open_price
                     else:
                         change = 0
 
+                    # 获取日期
+                    date_val = row.get("datetime") if "datetime" in row.index else row.get("date")
+                    if pd.notna(date_val):
+                        if hasattr(date_val, 'strftime'):
+                            date_str = date_val.strftime("%Y-%m-%d")
+                        else:
+                            date_str = str(date_val)[:10]
+                    else:
+                        date_str = ""
+
                     history.append({
-                        "date": row["datetime"].strftime("%Y-%m-%d") if pd.notna(row.get("datetime")) else "",
-                        "open": float(row.get(f"($open, {code})", 0)) if pd.notna(row.get(f"($open, {code})")) else None,
-                        "close": float(row.get(f"($close, {code})", 0)) if pd.notna(row.get(f"($close, {code})")) else None,
-                        "high": float(row.get(f"($high, {code})", 0)) if pd.notna(row.get(f"($high, {code})")) else None,
-                        "low": float(row.get(f"($low, {code})", 0)) if pd.notna(row.get(f"($low, {code})")) else None,
-                        "volume": float(row.get(f"($volume, {code})", 0)) if pd.notna(row.get(f"($volume, {code})")) else None,
-                        "amount": float(row.get(f"($amount, {code})", 0)) if pd.notna(row.get(f"($amount, {code})")) else None,
+                        "date": date_str,
+                        "open": open_price,
+                        "close": close_price,
+                        "high": high_price,
+                        "low": low_price,
+                        "volume": volume,
+                        "amount": amount,
                         "change": change
                     })
 
