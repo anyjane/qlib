@@ -410,7 +410,8 @@ async def get_stocks_data_status():
                 "has_data": data_info['has_data'],
                 "data_start_date": data_info.get('start_date'),
                 "data_end_date": data_info.get('end_date'),
-                "data_count": data_info.get('count', 0)
+                "data_count": data_info.get('count', 0),
+                "data_updated_at": data_info.get('updated_at')
             })
         return result
     except Exception as e:

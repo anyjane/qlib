@@ -650,7 +650,8 @@ class TencentDataService:
                                 "has_data": True,
                                 "start_date": metadata["start_date"],
                                 "end_date": metadata["end_date"],
-                                "count": metadata.get("count", 0)
+                                "count": metadata.get("count", 0),
+                                "updated_at": metadata.get("updated_at")
                             }
                 except Exception as e:
                     logger.debug(f"从元数据文件读取失败: {e}")

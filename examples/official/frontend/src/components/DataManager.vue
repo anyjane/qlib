@@ -103,6 +103,17 @@
           sortable
           :sort-method="(a, b) => sortByField(a, b, 'data_count', true)"
         />
+        <el-table-column
+          prop="data_updated_at"
+          label="最后更新"
+          width="160"
+          sortable
+          :sort-method="(a, b) => sortByField(a, b, 'data_updated_at')"
+        >
+          <template #default="{ row }">
+            {{ formatDateTime(row.data_updated_at) }}
+          </template>
+        </el-table-column>
         <el-table-column label="操作" fixed="right" width="200">
           <template #default="{ row }">
             <el-button
@@ -274,6 +285,21 @@ export default {
       }
       selectedStocks.value = []
       lastClickedIndex.value = -1
+    }
+
+    // 格式化日期时间（用于显示最后更新时间）
+    const formatDateTime = (isoString) => {
+      if (!isoString) return '-'
+      try {
+        const date = new Date(isoString)
+        const month = String(date.getMonth() + 1).padStart(2, '0')
+        const day = String(date.getDate()).padStart(2, '0')
+        const hours = String(date.getHours()).padStart(2, '0')
+        const minutes = String(date.getMinutes()).padStart(2, '0')
+        return `${month}-${day} ${hours}:${minutes}`
+      } catch {
+        return '-'
+      }
     }
 
     // 日期对比函数
@@ -448,7 +474,8 @@ export default {
       handleBatchUpdate,
       handleBatchDelete,
       handleDeleteStock,
-      handleRowDblClick
+      handleRowDblClick,
+      formatDateTime
     }
   }
 }
