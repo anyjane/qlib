@@ -46,9 +46,11 @@
     <!-- 股票数据表格 -->
     <el-card shadow="hover" class="table-card">
       <el-table
+        ref="tableRef"
         v-loading="loading"
         :data="filteredStocks"
         @selection-change="handleSelectionChange"
+        @select="handleSelect"
         stripe
         height="calc(100vh - 300px)"
       >
@@ -147,13 +149,19 @@ import TaskMonitor from './TaskMonitor.vue'
 export default {
   name: 'DataManager',
   components: {
-    TaskMonitor
+    TaskMonitor,
+    Search,
+    Refresh,
+    Download,
+    Delete
   },
   setup() {
     const searchKeyword = ref('')
     const stocks = ref([])
     const selectedStocks = ref([])
     const loading = ref(false)
+    const tableRef = ref(null)
+    const lastClickedIndex = ref(-1)
 
     // 过滤后的股票列表
     const filteredStocks = computed(() => {
@@ -188,6 +196,50 @@ export default {
       selectedStocks.value = selection
     }
 
+    // 跟踪 Shift 键状态
+    const isShiftPressed = ref(false)
+    
+    const handleKeyDown = (e) => {
+      if (e.key === 'Shift') {
+        isShiftPressed.value = true
+      }
+    }
+    
+    const handleKeyUp = (e) => {
+      if (e.key === 'Shift') {
+        isShiftPressed.value = false
+      }
+    }
+
+    // 单个行选择事件（checkbox 点击时触发）
+    const handleSelect = (selection, row) => {
+      const currentIndex = filteredStocks.value.findIndex(s => s.code === row.code)
+      
+      // 检查这一行是否被选中（在新 selection 中）
+      const isSelected = selection.some(s => s.code === row.code)
+      
+      if (isShiftPressed.value && lastClickedIndex.value >= 0 && currentIndex !== lastClickedIndex.value && isSelected) {
+        // Shift+Click: 选择从上次点击到当前行的范围
+        const startIndex = Math.min(lastClickedIndex.value, currentIndex)
+        const endIndex = Math.max(lastClickedIndex.value, currentIndex)
+        
+        // 获取范围内的所有行
+        const rangeRows = filteredStocks.value.slice(startIndex, endIndex + 1)
+        
+        // 使用 el-table 的 toggleRowSelection 方法选中这些行
+        if (tableRef.value) {
+          rangeRows.forEach(rangeRow => {
+            tableRef.value.toggleRowSelection(rangeRow, true)
+          })
+        }
+      }
+      
+      // 更新最后点击的索引
+      if (isSelected) {
+        lastClickedIndex.value = currentIndex
+      }
+    }
+
     // 排序变化
     const handleSortChange = ({ prop, order }) => {
       sortField.value = prop
@@ -196,12 +248,20 @@ export default {
 
     // 全选
     const handleSelectAll = () => {
-      selectedStocks.value = [...filteredStocks.value]
+      if (tableRef.value) {
+        filteredStocks.value.forEach(row => {
+          tableRef.value.toggleRowSelection(row, true)
+        })
+      }
     }
 
     // 清空选择
     const handleClearSelection = () => {
+      if (tableRef.value) {
+        tableRef.value.clearSelection()
+      }
       selectedStocks.value = []
+      lastClickedIndex.value = -1
     }
 
     // 日期对比函数
@@ -328,6 +388,10 @@ export default {
       loadStocksData()
       wsClient.connect('ws://localhost:8000')
       
+      // 添加键盘事件监听器（用于 Shift 多选）
+      window.addEventListener('keydown', handleKeyDown)
+      window.addEventListener('keyup', handleKeyUp)
+      
       wsClient.on('task_update', (message) => {
         console.log('Task update received:', message)
       })
@@ -335,6 +399,9 @@ export default {
 
     onUnmounted(() => {
       wsClient.disconnect()
+      // 移除键盘事件监听器
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
     })
 
     return {
@@ -343,11 +410,13 @@ export default {
       selectedStocks,
       loading,
       filteredStocks,
+      tableRef,
       sortByField,
       sortByDate,
       sortByStatus,
       handleRefresh,
       handleSelectionChange,
+      handleSelect,
       handleSelectAll,
       handleClearSelection,
       handleDownloadStock,
