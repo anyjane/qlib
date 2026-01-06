@@ -12,6 +12,7 @@ from loguru import logger
 import subprocess
 import time
 import platform
+import json
 
 # 统一从 config 模块获取配置
 from config import settings
@@ -270,6 +271,8 @@ class TencentDataService:
                     # 检查是否需要继续获取
                     # 获取这批数据中最旧的日期（第一条是最旧的，数据是升序排列）
                     oldest_date_str = kline_data[0][0]
+                    newest_date_str = kline_data[-1][0]
+                    logger.info(f"[{code}] 本批次数据范围: {oldest_date_str} 到 {newest_date_str}")
                     try:
                         oldest_date = pd.Timestamp(oldest_date_str)
                     except Exception as e:
@@ -311,6 +314,10 @@ class TencentDataService:
                     ]
 
                     logger.info(f"[{code}] 去重后 {len(unique_data)} 条，过滤后 {len(filtered_data)} 条")
+                    if filtered_data:
+                        filtered_start_date = filtered_data[0][0]
+                        filtered_end_date = filtered_data[-1][0]
+                        logger.info(f"[{code}] 过滤后数据范围: {filtered_start_date} 到 {filtered_end_date}")
                     data_dict[code] = {
                         "data": {
                             code: {
@@ -551,6 +558,31 @@ class TencentDataService:
                         raise Exception(f"dump_bin failed with return code {result.returncode}")
                     else:
                         logger.info("数据转换完成")
+
+                        # 保存元数据文件（记录真实的日期范围）
+                        metadata_dir = qlib_dir / "metadata"
+                        metadata_dir.mkdir(parents=True, exist_ok=True)
+
+                        for code in updated_codes:
+                            csv_path = normalize_dir / f"{code}.csv"
+                            if csv_path.exists():
+                                try:
+                                    df = pd.read_csv(csv_path)
+                                    if not df.empty and 'date' in df.columns:
+                                        df['date'] = pd.to_datetime(df['date'])
+                                        metadata = {
+                                            "start_date": df['date'].min().strftime('%Y-%m-%d'),
+                                            "end_date": df['date'].max().strftime('%Y-%m-%d'),
+                                            "count": len(df),
+                                            "updated_at": datetime.now().isoformat()
+                                        }
+                                        metadata_file = metadata_dir / f"{code}.json"
+                                        with open(metadata_file, 'w') as f:
+                                            json.dump(metadata, f, indent=2)
+                                        logger.info(f"[{code}] 保存元数据: {metadata}")
+                                except Exception as e:
+                                    logger.warning(f"[{code}] 保存元数据失败: {e}")
+
                 finally:
                     # 释放文件锁
                     lock.release()
@@ -578,21 +610,39 @@ class TencentDataService:
         """
         从文件系统检查股票数据信息（不初始化 Qlib）
 
-        通过二进制文件的起始索引和日历文件计算真实的日期范围
-        Qlib 二进制格式：前4字节是起始索引(float存储的int)，后续是数据
+        优先从元数据文件读取真实日期范围，如果没有则从二进制文件和日历文件计算
         """
         import struct
-        
+        import json
+
         try:
             data_path = Path(QLIB_PROVIDER_URI).expanduser()
+
+            # 优先尝试从元数据文件读取（包含最新的真实日期范围）
+            metadata_file = data_path / "metadata" / f"{code}.json"
+            if metadata_file.exists():
+                try:
+                    with open(metadata_file, 'r') as f:
+                        metadata = json.load(f)
+                        if metadata.get("start_date") and metadata.get("end_date"):
+                            return {
+                                "has_data": True,
+                                "start_date": metadata["start_date"],
+                                "end_date": metadata["end_date"],
+                                "count": metadata.get("count", 0)
+                            }
+                except Exception as e:
+                    logger.debug(f"从元数据文件读取失败: {e}")
+
+            # 回退到从二进制文件读取
             instrument_path = data_path / "features" / code
-            
+
             if not instrument_path.exists():
                 return {"has_data": False}
 
             # 检查是否有数据文件（.bin 文件）
             bin_files = list(instrument_path.glob("*.bin"))
-            
+
             if not bin_files:
                 return {"has_data": False}
 
@@ -600,30 +650,30 @@ class TencentDataService:
             close_bin = instrument_path / "close.day.bin"
             if not close_bin.exists():
                 close_bin = bin_files[0]  # 使用任意一个 bin 文件
-            
+
             start_index = 0
             record_count = 0
-            
+
             with open(close_bin, 'rb') as f:
                 # 读取前4字节作为起始索引（float 格式存储）
                 index_bytes = f.read(4)
                 if len(index_bytes) == 4:
                     start_index = int(struct.unpack('<f', index_bytes)[0])
-                
+
                 # 计算数据条数
                 f.seek(0, 2)  # 移到文件末尾
                 file_size = f.tell()
                 record_count = (file_size - 4) // 4 if file_size > 4 else 0
-            
+
             # 从日历文件读取日期列表
             start_date = None
             end_date = None
             calendar_file = data_path / "calendars" / "day.txt"
-            
+
             if calendar_file.exists() and record_count > 0:
                 with open(calendar_file, 'r') as f:
                     calendar_dates = [line.strip() for line in f if line.strip()]
-                
+
                 # 根据起始索引和记录数计算日期范围
                 if start_index < len(calendar_dates):
                     start_date = calendar_dates[start_index]
